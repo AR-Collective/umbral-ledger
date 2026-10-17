@@ -1,4 +1,4 @@
-// Entry point: creates the Phaser game and (in dev builds) the dev panel.
+// Entry point: creates the game and (in dev builds) the dev panel.
 
 import Phaser from 'phaser';
 import { TUNING } from './tuning.js';
@@ -19,6 +19,13 @@ const config = {
   width: TUNING.view.width,
   height: TUNING.view.height,
   backgroundColor: '#000000',
+  render: {
+    antialias: true,
+    pixelArt: false,
+    roundPixels: false,
+    mipmapFilter: 'LINEAR_MIPMAP_LINEAR',
+    powerPreference: 'high-performance',
+  },
   scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
   physics: { default: 'arcade', arcade: { gravity: { y: TUNING.physics.gravity }, debug: false } },
   input: { gamepad: true },

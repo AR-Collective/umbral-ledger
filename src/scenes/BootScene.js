@@ -17,9 +17,8 @@ import cutMemory from '../assets/cutscenes/memory.jpg';
 import cutResist from '../assets/cutscenes/resist.jpg';
 import cutAbility from '../assets/cutscenes/ability.jpg';
 
-// Painted cutscene panels. CutsceneScene uses 'cut_<art>' when it exists and
-// falls back to its code-drawn painter otherwise. Add a panel by dropping an
-// image in src/assets/cutscenes/ and listing it here.
+// Painted cutscene panels (2160x1040 2K HD). CutsceneScene uses 'cut_<art>' when
+// it exists and falls back to its code-drawn painter otherwise.
 const CUTSCENE_ART = {
   fire: cutFire,
   doorway: cutDoorway,
@@ -42,6 +41,10 @@ export class BootScene extends Phaser.Scene {
   }
 
   create() {
+    for (const art of Object.keys(CUTSCENE_ART)) {
+      const tex = this.textures.get(`cut_${art}`);
+      if (tex && tex.setFilter) tex.setFilter(Phaser.Textures.FilterMode.LINEAR);
+    }
     loadDev();
     this.registry.set('settings', { muted: false, shake: true, fullHud: false });
     this.registry.set('timeScale', 1);

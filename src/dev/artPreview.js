@@ -75,14 +75,15 @@ if (!only || only === 'cutscenes') {
   const nodes = cutscenes.map(([name, url]) => {
     const img = document.createElement('img');
     img.src = url;
-    img.title = name;
+    img.title = `${name} (2160×1040 2K HD)`;
     img.alt = name;
-    img.style.width = '392px';
-    img.style.height = '208px';
+    img.style.width = '1080px';
+    img.style.maxWidth = '100%';
+    img.style.height = 'auto';
     img.style.border = '2px solid #e9e2f5';
     return img;
   });
-  section('Cutscene panels', nodes);
+  section('Cutscene panels (2160×1040 2K HD)', nodes);
 }
 
 if (!only || only === 'chars') {

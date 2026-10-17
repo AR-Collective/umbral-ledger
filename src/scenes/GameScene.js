@@ -43,6 +43,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   create() {
+    if (this.scale.width !== TUNING.view.width || this.scale.height !== TUNING.view.height) {
+      this.scale.setGameSize(TUNING.view.width, TUNING.view.height);
+    }
     const level = (this.level = LEVELS[this.worldId]);
     this.settings = this.registry.get('settings');
 

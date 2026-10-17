@@ -17,6 +17,9 @@ export class EndScene extends Phaser.Scene {
 
   create() {
     const { width: W, height: H } = TUNING.view;
+    if (this.scale.width !== W || this.scale.height !== H) {
+      this.scale.setGameSize(W, H);
+    }
     const d = GAME.data;
     const type = this.data_.type;
     this.cameras.main.setBackgroundColor('#040309').fadeIn(900, 0, 0, 0);

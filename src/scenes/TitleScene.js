@@ -7,6 +7,8 @@ import { GAME } from '../systems/state.js';
 import { AUDIO } from '../systems/audio.js';
 import { DEV } from '../dev/devFlags.js';
 
+const HI_RES = 2; // 2K (2560x1440) title screen rendering for crisp key art and typography
+
 export class TitleScene extends Phaser.Scene {
   constructor() {
     super('Title');
@@ -14,6 +16,11 @@ export class TitleScene extends Phaser.Scene {
 
   create() {
     const { width: W, height: H } = TUNING.view;
+    const S = HI_RES;
+    if (this.scale.width !== W * S || this.scale.height !== H * S) {
+      this.scale.setGameSize(W * S, H * S);
+    }
+    this.cameras.main.setViewport(0, 0, W * S, H * S).setZoom(S).centerOn(W / 2, H / 2);
     this.cameras.main.setBackgroundColor('#030208');
     this.cameras.main.fadeIn(1200, 0, 0, 0);
 
@@ -54,7 +61,7 @@ export class TitleScene extends Phaser.Scene {
     });
 
     // the logo: glowing letters, a gold rule with an hourglass, the three themes
-    const logo = this.add.text(W / 2, 128, TITLE.name, { fontFamily: 'Cinzel, Georgia, serif', fontSize: '92px', fontStyle: 'bold', color: '#f1e6d2', letterSpacing: 14 })
+    const logo = this.add.text(W / 2, 128, TITLE.name, { fontFamily: 'Cinzel, Georgia, serif', fontSize: '92px', fontStyle: 'bold', color: '#f1e6d2', letterSpacing: 14, resolution: S })
       .setOrigin(0.5).setShadow(0, 0, '#8a5cff', 26, false, true).setAlpha(0);
     this.tweens.add({ targets: logo, alpha: 1, y: 120, duration: 1800, ease: 'Sine.easeOut' });
     const glowPulse = this.add.image(W / 2, 120, 'softglow').setBlendMode('ADD').setTint(0x7a4cff).setScale(9, 1.6).setAlpha(0.18);
@@ -66,11 +73,11 @@ export class TitleScene extends Phaser.Scene {
     rule.fillStyle(0xe8c372, 0.9);
     rule.fillCircle(W / 2 - 262, 196, 2.5); rule.fillCircle(W / 2 + 262, 196, 2.5);
     this.add.image(W / 2, 196, 'icon_sand').setScale(0.9);
-    this.add.text(W / 2, 236, TITLE.tagline, { fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '30px', color: '#e8c372', fontStyle: 'italic' })
+    this.add.text(W / 2, 236, TITLE.tagline, { fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '30px', color: '#e8c372', fontStyle: 'italic', resolution: S })
       .setOrigin(0.5).setShadow(0, 0, '#000000', 10, false, true);
-    this.add.text(W / 2, H - 26, TITLE.slice.toUpperCase(), { fontFamily: 'Inter, Arial, sans-serif', fontSize: '11px', color: '#7d7792', letterSpacing: 3 }).setOrigin(0.5);
+    this.add.text(W / 2, H - 26, TITLE.slice.toUpperCase(), { fontFamily: 'Inter, Arial, sans-serif', fontSize: '11px', color: '#7d7792', letterSpacing: 3, resolution: S }).setOrigin(0.5);
 
-    this.press = this.add.text(W / 2, 560, 'Press any key', { fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '30px', color: '#e6dff2' })
+    this.press = this.add.text(W / 2, 560, 'Press any key', { fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '30px', color: '#e6dff2', resolution: S })
       .setOrigin(0.5).setShadow(0, 0, '#000000', 8, false, true);
     this.tweens.add({ targets: this.press, alpha: 0.3, duration: 1100, yoyo: true, repeat: -1 });
 
@@ -78,16 +85,16 @@ export class TitleScene extends Phaser.Scene {
     this.sel = 0;
     this.stage = 'press';
     // controls page: actions on the left, keys on the right, inside a dark panel
-    const col = { fontFamily: 'Inter, Arial, sans-serif', fontSize: '17px', lineSpacing: 7 };
+    const col = { fontFamily: 'Inter, Arial, sans-serif', fontSize: '17px', lineSpacing: 7, resolution: S };
     this.info = this.add.container(0, 0).setVisible(false);
     this.info.add([
       this.add.rectangle(W / 2, 478, 760, 400, 0x05040a, 0.9).setStrokeStyle(1, 0xe8c372, 0.45),
       this.add.text(W / 2 - 16, 300, CONTROLS.map(([a]) => a).join('\n'), { ...col, color: '#a9a3bd', align: 'right' }).setOrigin(1, 0),
       this.add.text(W / 2 + 16, 300, CONTROLS.map(([, k]) => k).join('\n'), { ...col, color: '#efe3cc' }).setOrigin(0, 0),
       this.add.text(W / 2, 600, GAMEPAD_CONTROLS, { ...col, fontSize: '14px', color: '#8a849e', align: 'center', wordWrap: { width: 680 } }).setOrigin(0.5, 0),
-      this.add.text(W / 2, 652, 'Press Esc to go back', { fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '22px', color: '#e8c372', fontStyle: 'italic' }).setOrigin(0.5, 0),
+      this.add.text(W / 2, 652, 'Press Esc to go back', { fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '22px', color: '#e8c372', fontStyle: 'italic', resolution: S }).setOrigin(0.5, 0),
     ]);
-    if (TUNING.dev.enabled) this.add.text(W - 16, H - 14, 'Dev menu: ` (backtick)', { fontFamily: 'Inter, Arial', fontSize: '12px', color: '#4f4a62' }).setOrigin(1);
+    if (TUNING.dev.enabled) this.add.text(W - 16, H - 14, 'Dev menu: ` (backtick)', { fontFamily: 'Inter, Arial', fontSize: '12px', color: '#4f4a62', resolution: S }).setOrigin(1);
 
     this.keys = this.input.keyboard.addKeys('UP,DOWN,W,S,E,ENTER,SPACE,ESC');
     this.input.keyboard.on('keydown', () => this.onAny());
@@ -113,7 +120,7 @@ export class TitleScene extends Phaser.Scene {
     this.entries.push(['Controls', () => this.showControls()]);
     this.items.forEach((t) => t.destroy());
     this.items = this.entries.map(([label], i) => this.add.text(W / 2, 520 + i * 48 - (this.entries.length - 2) * 24, label, {
-      fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '32px', color: '#a9a3bd',
+      fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '32px', color: '#a9a3bd', resolution: HI_RES,
     }).setOrigin(0.5).setShadow(0, 0, '#000000', 8, false, true).setInteractive({ useHandCursor: true })
       .on('pointerover', () => { this.sel = i; this.render(); })
       .on('pointerdown', () => { if (this.stage === 'menu') this.entries[i][1](); }));
@@ -130,8 +137,12 @@ export class TitleScene extends Phaser.Scene {
     GAME.enterWorld('prologue');
     this.cameras.main.fadeOut(900, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () => {
-      if (DEV.skipCutscenes) this.scene.start('Game', { world: 'prologue' });
-      else this.scene.start('Cutscene', { id: 'intro', next: { scene: 'Game', data: { world: 'prologue' } } });
+      if (DEV.skipCutscenes) {
+        this.scale.setGameSize(TUNING.view.width, TUNING.view.height);
+        this.scene.start('Game', { world: 'prologue' });
+      } else {
+        this.scene.start('Cutscene', { id: 'intro', next: { scene: 'Game', data: { world: 'prologue' } } });
+      }
     });
   }
 
@@ -141,6 +152,7 @@ export class TitleScene extends Phaser.Scene {
     const cp = GAME.data.checkpoint;
     this.cameras.main.fadeOut(600, 0, 0, 0);
     this.cameras.main.once('camerafadeoutcomplete', () => {
+      this.scale.setGameSize(TUNING.view.width, TUNING.view.height);
       this.scene.start('Game', { world: GAME.data.world, spawn: cp && cp.world === GAME.data.world ? cp.id : null, fromDeath: true });
     });
   }
