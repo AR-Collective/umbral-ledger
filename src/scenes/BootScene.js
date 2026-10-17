@@ -10,12 +10,27 @@ import { registerPipelines } from '../systems/fx.js';
 import cutFire from '../assets/cutscenes/fire.jpg';
 import cutDoorway from '../assets/cutscenes/doorway.jpg';
 import cutSplit from '../assets/cutscenes/split.jpg';
+import cutLamp from '../assets/cutscenes/lamp.jpg';
+import cutTitle from '../assets/cutscenes/title.jpg';
+import cutFragment from '../assets/cutscenes/fragment.jpg';
 import cutMemory from '../assets/cutscenes/memory.jpg';
+import cutResist from '../assets/cutscenes/resist.jpg';
+import cutAbility from '../assets/cutscenes/ability.jpg';
 
 // Painted cutscene panels. CutsceneScene uses 'cut_<art>' when it exists and
 // falls back to its code-drawn painter otherwise. Add a panel by dropping an
 // image in src/assets/cutscenes/ and listing it here.
-const CUTSCENE_ART = { fire: cutFire, doorway: cutDoorway, split: cutSplit, memory: cutMemory };
+const CUTSCENE_ART = {
+  fire: cutFire,
+  doorway: cutDoorway,
+  split: cutSplit,
+  lamp: cutLamp,
+  title: cutTitle,
+  fragment: cutFragment,
+  memory: cutMemory,
+  resist: cutResist,
+  ability: cutAbility,
+};
 
 export class BootScene extends Phaser.Scene {
   constructor() {

@@ -1,6 +1,15 @@
-// Dev tool: paints every character sheet and scenery texture onto a plain page,
+// Dev tool: paints every character sheet, cutscene panel, and scenery texture onto a plain page,
 // so art can be checked without playing to the right spot.
 import { paintSheets } from '../art/characters.js';
+import cutFire from '../assets/cutscenes/fire.jpg';
+import cutDoorway from '../assets/cutscenes/doorway.jpg';
+import cutSplit from '../assets/cutscenes/split.jpg';
+import cutLamp from '../assets/cutscenes/lamp.jpg';
+import cutTitle from '../assets/cutscenes/title.jpg';
+import cutFragment from '../assets/cutscenes/fragment.jpg';
+import cutMemory from '../assets/cutscenes/memory.jpg';
+import cutResist from '../assets/cutscenes/resist.jpg';
+import cutAbility from '../assets/cutscenes/ability.jpg';
 
 const out = document.getElementById('out');
 const params = new URLSearchParams(location.search);
@@ -51,6 +60,31 @@ function closeups(sheet, def) {
   return list;
 }
 
+if (!only || only === 'cutscenes') {
+  const cutscenes = [
+    ['fire', cutFire],
+    ['doorway', cutDoorway],
+    ['split', cutSplit],
+    ['lamp', cutLamp],
+    ['title', cutTitle],
+    ['fragment', cutFragment],
+    ['memory', cutMemory],
+    ['resist', cutResist],
+    ['ability', cutAbility],
+  ];
+  const nodes = cutscenes.map(([name, url]) => {
+    const img = document.createElement('img');
+    img.src = url;
+    img.title = name;
+    img.alt = name;
+    img.style.width = '392px';
+    img.style.height = '208px';
+    img.style.border = '2px solid #e9e2f5';
+    return img;
+  });
+  section('Cutscene panels', nodes);
+}
+
 if (!only || only === 'chars') {
   const sheets = paintSheets();
   for (const [key, { sheet, def }] of Object.entries(sheets)) {
@@ -60,7 +94,7 @@ if (!only || only === 'chars') {
 }
 
 import('../art/scenery.js').then((m) => {
-  if (only === 'chars' || !m.previewScenery) { document.body.dataset.ready = '1'; return; }
+  if (only === 'chars' || only === 'cutscenes' || !m.previewScenery) { document.body.dataset.ready = '1'; return; }
   for (const [title, canvases] of m.previewScenery(params)) section(title, canvases);
   document.body.dataset.ready = '1';
 }).catch((e) => { console.error(e); document.body.dataset.ready = '1'; });

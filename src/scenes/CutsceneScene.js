@@ -207,7 +207,7 @@ export class CutsceneScene extends Phaser.Scene {
       const img = add(this.add.image(0, -40, `cut_${panel.art}`));
       const cover = Math.max(pw / img.width, ph / img.height) * 1.05;
       img.setScale(cover);
-      const drift = panel.art === 'fire' || panel.art === 'memory' ? 18 : 0;
+      const drift = panel.art === 'fire' || panel.art === 'memory' || panel.art === 'title' ? 18 : 10;
       img.x = -drift;
       this.tweens.add({ targets: img, x: drift, duration: 9000, ease: 'Sine.easeInOut' });
       const at = (u, v) => [L + u * pw, top + v * ph];
@@ -229,19 +229,67 @@ export class CutsceneScene extends Phaser.Scene {
           break;
         }
         case 'split': {
-          const [mx, my] = at(0.29, 0.62);
-          const [sx, sy] = at(0.63, 0.45);
+          const [mx, my] = at(0.32, 0.60);
+          const [sx, sy] = at(0.65, 0.44);
           pulse(glow(sx, sy, 0x7a4cff, 3, 4.5, 0.25), 0.45, 1600);
-          embers(mx, my, 140, 0.8);
+          embers(mx, my, 180, 0.85);
           motes(sx, sy, 360, 360, [0xb48cff, 0x7a4cff]);
           motes(0, -40, pw, ph, 0x9fb4ff, 1);
           break;
         }
+        case 'lamp': {
+          const [lx, ly] = at(0.57, 0.51);
+          const [hx, hy] = at(0.71, 0.17);
+          const [sx, sy] = at(0.34, 0.72);
+          pulse(glow(lx, ly, 0xffb850, 2.6, 2.6, 0.24), 0.42, 900);
+          pulse(glow(hx, hy, 0xe8c372, 3.2, 3.2, 0.16), 0.3, 1800);
+          pulse(glow(sx, sy, 0x7a4cff, 2.2, 3.2, 0.18), 0.32, 1600);
+          motes(lx, ly, 420, 380, [0xffe8a8, 0xe8c372], -1);
+          motes(sx, sy, 220, 260, [0xb48cff, 0x7a4cff], -1);
+          break;
+        }
+        case 'title': {
+          const [lx, ly] = at(0.81, 0.65);
+          pulse(glow(lx, ly, 0xff9a3d, 2.6, 2.6, 0.22), 0.38, 620);
+          add(this.add.tileSprite(0, 60, pw, 260, 'fog_band').setTint(0x9a8cc0).setAlpha(0.22));
+          motes(0, 0, pw, ph, [0xffd49a, 0xb48cff], -1);
+          const t = add(this.add.text(0, -90, panel.title, { fontFamily: 'Cinzel, Georgia', fontSize: '86px', color: '#f1e6d2', letterSpacing: 16 }).setOrigin(0.5));
+          t.setShadow(0, 0, '#9a6bff', 28, true, true);
+          vignette(0.45);
+          break;
+        }
+        case 'fragment': {
+          const [gx, gy] = at(0.50, 0.24);
+          const [fx, fy] = at(0.55, 0.53);
+          const [sx, sy] = at(0.50, 0.76);
+          pulse(glow(gx, gy, 0xe8c372, 3.4, 3.4, 0.2), 0.35, 1600);
+          pulse(glow(fx, fy, 0xffd070, 2.0, 2.0, 0.28), 0.48, 800);
+          pulse(glow(sx, sy, 0x7a4cff, 2.8, 3.4, 0.2), 0.35, 1500);
+          add(this.add.particles(gx, gy + 20, 'spark', { x: { min: -40, max: 40 }, lifespan: 2200, speedY: { min: 70, max: 140 }, speedX: { min: -12, max: 12 }, scale: { start: 1.0, end: 0.2 }, tint: [0xffe8a8, 0xe8c372], blendMode: 'ADD', frequency: 40 }));
+          motes(sx, sy, 320, 240, [0xb48cff, 0x9a6bff, 0xffe8a8], -1);
+          break;
+        }
         case 'memory': {
-          const [cx, cy] = at(0.5, 0.38);
+          const [cx, cy] = at(0.5, 0.42);
           pulse(glow(cx, cy, 0xffa040, 5, 5, 0.18), 0.34, 1400);
           embers(0, bot - 10, pw, 0.9);
           smoke(0, top + 60, pw, 0x1a0c06, 0.25);
+          break;
+        }
+        case 'resist': {
+          const [rx, ry] = at(0.48, 0.34);
+          const [sx, sy] = at(0.32, 0.65);
+          pulse(glow(rx, ry, 0xffd49a, 3.2, 3.2, 0.24), 0.42, 900);
+          pulse(glow(sx, sy, 0x7a4cff, 2.6, 3.8, 0.22), 0.38, 1500);
+          motes(rx, ry, 280, 280, [0xffe8a8, 0xb48cff, 0xe6dcff], -1);
+          break;
+        }
+        case 'ability': {
+          const [ax, ay] = at(0.70, 0.42);
+          const [lx, ly] = at(0.26, 0.68);
+          pulse(glow(ax, ay, 0x7a4cff, 2.8, 3.8, 0.24), 0.42, 1200);
+          pulse(glow(lx, ly, 0xffa040, 2.4, 2.4, 0.18), 0.32, 900);
+          motes(ax, ay, 240, 320, [0xb48cff, 0x9a6bff], -1);
           break;
         }
         default: break;
