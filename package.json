@@ -1,0 +1,21 @@
+{
+  "name": "umbral-ledger",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Umbral Ledger vertical slice: a stealth game where you are a shadow, light is the enemy, and the kind voice guiding you may be lying.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:single": "vite build --mode single",
+    "preview": "vite preview",
+    "test": "node --test \"tests/*.test.js\""
+  },
+  "dependencies": {
+    "phaser": "3.90.0"
+  },
+  "devDependencies": {
+    "vite": "^7.3.7",
+    "vite-plugin-singlefile": "^2.3.3"
+  }
+}
