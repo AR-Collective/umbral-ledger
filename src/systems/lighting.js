@@ -2,21 +2,35 @@
 // LIGHTING: the physics of this game.
 //
 // The one rule from the design doc: "If it looks dark, it is dark."
-// So there is exactly ONE description of the light in a level (the lights,
-// the occluders that block them, and shade zones), and two readers of it:
+// There is exactly ONE description of the light in a level (the lights and
+// the shapes that block them) and two readers of it:
 //
 //   render()        draws what the player SEES
 //   getLightAt(x,y) tells the damage system and the enemy AI what IS
 //
-// Both use the same light positions, the same intensities (flicker included),
-// the same falloff curve, the same occluders and the same blending maths,
-// so they cannot disagree. tests/lighting.test.js checks that.
+// Both read the same light positions, the same flicker, the same falloff
+// curve and the same blocking shapes, so they cannot disagree.
+// tests/lighting.test.js checks that with thousands of random points.
 //
-// Blending maths (shared by both readers):
-//   each light contributes li = intensity * falloff(distance / radius)
-//   lights combine as lit = 1 - (1 - l1)(1 - l2)...
-//   shade zones then darken: lit = lit * (1 - s1)(1 - s2)...
-//   the final value = ambient + (1 - ambient) * lit
+// HOW A LIGHT LOOKS AND WORKS
+// A "burn" light (lantern, lamp, window shaft, fire) has a bright CORE with a
+// visible edge, then a faint HALO. Core = Light (burns, seen from far away).
+// Halo = Dim (safe, seen at mid range). Outside = Shade.
+// A "glow" light (a lit window) is halo only: it can never burn you.
+// A "safe" light (the cold blue Stillpoint glow) is ignored by gameplay.
+//
+// HOW LIGHTS ADD UP (same maths for both readers)
+//   each light contributes c = intensity * falloff(distance / radius)
+//   total = c1 + c2 + ...                       (capped at 1)
+//   Light if the brightest single burn light >= burnAt, or total >= burnTotal
+//   Dim   if total >= dimAt
+//   Shade otherwise
+//
+// THE LIGHT LAYER IS PINNED TO THE WORLD
+// It is drawn for the area around the camera (plus a margin) and placed at
+// that world position. The camera finishes moving only when the frame is
+// drawn, so a layer pinned to the screen would slide a few pixels behind the
+// world. Pinned to the world, light can never drift off the thing it lights.
 // =====================================================================
 
 import { TUNING } from '../tuning.js';
@@ -39,26 +53,6 @@ export function raySegment(ox, oy, dx, dy, ax, ay, bx, by) {
   const u = (qx * dy - qy * dx) / denom;
   if (t >= 0 && u >= 0 && u <= 1) return t;
   return Infinity;
-}
-
-// How light fades from the center (t = 0) to the edge of its radius (t = 1).
-// 1 - t^2 keeps a bright pool with a fairly crisp edge, so "the edge of the
-// light" is something you can see and plan around.
-export function falloff(t) {
-  if (t <= 0) return 1;
-  if (t >= 1) return 0;
-  return 1 - t * t;
-}
-
-// Window shafts stay strong along their length and only fade at the very end.
-export function beamFalloff(t) {
-  if (t <= 0.75) return 1;
-  if (t >= 1) return 0;
-  return 1 - (t - 0.75) / 0.25;
-}
-
-export function falloffOf(kind, t) {
-  return kind === 'beam' ? beamFalloff(t) : falloff(t);
 }
 
 export function rectPoly(x, y, w, h) {
@@ -146,6 +140,58 @@ function angleDiff(a, b) {
 }
 
 // ------------------------------------------------------------------
+// Falloff curves (shared by the renderer and the queries)
+// ------------------------------------------------------------------
+
+function smooth(e0, e1, x) {
+  const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+  return t * t * (3 - 2 * t);
+}
+
+// Bright core, a short visible drop, then a faint halo.
+export function coreHalo(t) {
+  if (t <= 0) return 1;
+  if (t >= 1) return 0;
+  const S = TUNING.light.shape;
+  if (t < S.coreEnd) {
+    const k = t / S.coreEnd;
+    return 1 - (1 - S.coreBottom) * k * k;
+  }
+  if (t < S.edgeEnd) {
+    return S.coreBottom + (S.halo - S.coreBottom) * smooth(S.coreEnd, S.edgeEnd, t);
+  }
+  const u = (t - S.edgeEnd) / (1 - S.edgeEnd);
+  return S.halo * Math.pow(1 - u, 1.6);
+}
+
+// Halo only, never above glowMax: a lit window, a candle seen through glass.
+export function softGlow(t) {
+  if (t <= 0) return TUNING.light.glowMax;
+  if (t >= 1) return 0;
+  return TUNING.light.glowMax * Math.pow(1 - t, 1.5);
+}
+
+// Window shafts stay strong along their length and fade only at the far end.
+export function beamFalloff(t) {
+  if (t <= 0.8) return 1;
+  if (t >= 1) return 0;
+  return 1 - (t - 0.8) / 0.2;
+}
+
+// The cold Stillpoint glow (drawn, but ignored by gameplay).
+function safeFalloff(t) {
+  if (t >= 1) return 0;
+  return Math.pow(1 - Math.max(0, t), 1.4);
+}
+
+export function falloffOf(kind, t) {
+  if (kind === 'glow') return softGlow(t);
+  if (kind === 'beam') return beamFalloff(t);
+  if (kind === 'safe') return safeFalloff(t);
+  return coreHalo(t);
+}
+
+// ------------------------------------------------------------------
 // Spatial index: buckets segments by x so long levels stay fast.
 // ------------------------------------------------------------------
 class SegmentIndex {
@@ -193,16 +239,14 @@ function boxSeg(seg, occ) {
 let NEXT_ID = 1;
 
 export class LightingSystem {
-  constructor({ ambient = 0.1, worldW = 4000, worldH = 1000 } = {}) {
-    this.ambient = ambient;
+  constructor({ worldW = 4000, worldH = 1000 } = {}) {
     this.worldW = worldW;
     this.worldH = worldH;
     this.index = new SegmentIndex();
     this.occluders = [];
     this.dynamicOccluders = [];
     this.lights = [];
-    this.shadeZones = [];
-    this.sun = { enabled: false, elevation: 10, intensity: 0, cur: 0, dx: 1, dy: 0, reach: 3200, glow: 0.22, color: [255, 214, 160] };
+    this.sun = { enabled: false, elevation: 10, intensity: 0, cur: 0, dx: 1, dy: 0, reach: 3200, color: [255, 206, 150] };
     this.time = 0;
     this.dynVersion = 0;
     this.scene = null;
@@ -210,16 +254,17 @@ export class LightingSystem {
 
   // ---------------- building the level ----------------
 
-  // Static rectangle that blocks light (walls, floors, pillars, crates).
-  // cover: true also makes its inside a hiding spot (total shade). Pillars,
-  // statues, crates and carts are "cover": standing in front of one in 2D
-  // means you are tucked behind it, so nothing lights or sees you there.
-  addRectOccluder(x, y, w, h, tag = '', { cover = false } = {}) {
-    if (cover) this.addShadeZone(x, y, w, h, 1, true);
-    const poly = rectPoly(x, y, w, h);
+  // A rectangle that blocks light. Light soaks a few pixels into it (the
+  // "inset") so its surfaces get a lit rim instead of staying black.
+  // cover: true marks it as a hiding place (crates, carts, pillars): merged
+  // inside it you are hidden even from a watcher standing right next to you.
+  addRectOccluder(x, y, w, h, tag = '', { cover = false, inset } = {}) {
+    const ins = inset ?? Math.min(TUNING.light.occluderInset, w * 0.25, h * 0.25);
+    const ix = x + ins, iy = y + ins, iw = w - ins * 2, ih = h - ins * 2;
+    const poly = rectPoly(ix, iy, iw, ih);
     const occ = {
-      id: NEXT_ID++, tag, poly, x, y, w, h, dynamic: false,
-      contains: (px, py) => px > x && px < x + w && py > y && py < y + h,
+      id: NEXT_ID++, tag, cover, poly, x, y, w, h, ix, iy, iw, ih, dynamic: false,
+      contains: (px, py) => px > ix && px < ix + iw && py > iy && py < iy + ih,
     };
     occ.segments = polySegments(poly).map((s) => boxSeg(s, occ));
     for (const s of occ.segments) this.index.add(s);
@@ -241,25 +286,12 @@ export class LightingSystem {
     return occ;
   }
 
-  // A region that is always darker, e.g. a doorway recess. strength 0..1.
-  addShadeZone(x, y, w, h, strength = 0.6, cover = false) {
-    const z = { x, y, w, h, strength, cover };
-    this.shadeZones.push(z);
-    return z;
-  }
-
-  // True if (x, y) is tucked inside cover (used to draw you as hidden).
-  coverAt(x, y) {
-    for (const z of this.shadeZones) {
-      if (z.cover && x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h) return true;
-    }
-    return false;
-  }
-
-  // def: { x, y, radius, intensity, color:[r,g,b], cone:{dir, spread} (degrees),
-  //        fire, harmless, glow, flicker, swing:{length, amp, period, phase},
+  // def: { x, y, radius, intensity, color:[r,g,b], kind: 'burn'|'glow'|'beam'|'safe',
+  //        cone:{dir, spread} (degrees), fire, flicker, swing:{length, amp, period, phase},
   //        pulse:{min, max, period, phase}, enabled }
   addLight(def) {
+    let kind = def.kind;
+    if (!kind) kind = def.harmless ? 'safe' : def.falloff === 'beam' ? 'beam' : 'burn';
     const L = {
       id: NEXT_ID++,
       x: def.x, y: def.y,
@@ -267,15 +299,13 @@ export class LightingSystem {
       intensity: def.intensity ?? 0.9,
       color: def.color ?? [255, 170, 90],
       cone: def.cone ? { dir: def.cone.dir, spread: def.cone.spread } : null,
+      kind,
       fire: !!def.fire,
-      harmless: !!def.harmless,
-      glow: def.glow ?? 0.55,
       flicker: def.flicker ?? 0,
       swing: def.swing ?? null,
       pulse: def.pulse ?? null,
       enabled: def.enabled ?? true,
       tag: def.tag ?? '',
-      falloff: def.falloff ?? 'radial',
       cx: def.x, cy: def.y, cur: def.intensity ?? 0.9,
       poly: null, polyKey: '',
       seed: Math.random() * 100,
@@ -379,7 +409,7 @@ export class LightingSystem {
     return false;
   }
 
-  // Contribution of one point light at (x, y), 0..1.
+  // Contribution of one light at (x, y), 0..1.
   contribution(L, x, y) {
     const dx = x - L.cx, dy = y - L.cy;
     const d2 = dx * dx + dy * dy;
@@ -389,28 +419,40 @@ export class LightingSystem {
       if (angleDiff(a, (L.cone.dir * Math.PI) / 180) > (L.cone.spread * Math.PI) / 180) return 0;
     }
     if (!this.lineOfSight(L.cx, L.cy, x, y)) return 0;
-    return L.cur * falloffOf(L.falloff, Math.sqrt(d2) / L.radius);
+    return L.cur * falloffOf(L.kind, Math.sqrt(d2) / L.radius);
   }
 
-  // THE query. Returns { value 0..1, state: shade|dim|light, fire: bool }.
+  // THE query. Returns { value 0..1, state: shade|dim|light, fire: bool, max }.
   getLightAt(x, y) {
-    let dark = 1;
+    const C = TUNING.light;
+    let total = 0;
+    let max = 0;
     let fire = 0;
-    if (this.sun.cur > 0 && !this.sunBlocked(x, y)) dark *= 1 - this.sun.cur;
+    if (this.sun.cur > 0 && !this.sunBlocked(x, y)) {
+      total += this.sun.cur;
+      max = Math.max(max, this.sun.cur);
+    }
     for (const L of this.lights) {
-      if (!L.enabled || L.harmless || L.cur <= 0) continue;
-      const li = this.contribution(L, x, y);
-      if (li <= 0) continue;
-      dark *= 1 - li;
-      if (L.fire && li > fire) fire = li;
+      if (!L.enabled || L.kind === 'safe' || L.cur <= 0) continue;
+      const c = this.contribution(L, x, y);
+      if (c <= 0) continue;
+      total += c;
+      if (L.kind !== 'glow') {
+        if (c > max) max = c;
+        if (L.fire && c > fire) fire = c;
+      }
     }
-    let lit = 1 - dark;
-    for (const z of this.shadeZones) {
-      if (x >= z.x && x <= z.x + z.w && y >= z.y && y <= z.y + z.h) lit *= 1 - z.strength;
+    const value = Math.min(1, total);
+    const state = max >= C.burnAt || total >= C.burnTotal ? LIGHT : total >= C.dimAt ? DIM : SHADE;
+    return { value, state, fire: state === LIGHT && fire >= C.burnAt, max };
+  }
+
+  // True if (x, y) is tucked inside cover (a crate, cart, pillar, statue).
+  coverAt(x, y) {
+    for (const o of this.occluders) {
+      if (o.cover && x > o.x && x < o.x + o.w && y > o.y && y < o.y + o.h) return true;
     }
-    const value = this.ambient + (1 - this.ambient) * lit;
-    const state = value < TUNING.light.shadeMax ? SHADE : value < TUNING.light.dimMax ? DIM : LIGHT;
-    return { value, state, fire: state === LIGHT && fire > 0.45 };
+    return false;
   }
 
   // Visibility polygon of a light, cached until the light or a moving occluder moves.
@@ -443,61 +485,46 @@ export class LightingSystem {
 
   // ---------------- rendering (browser only) ----------------
 
-  attach(scene, { darkColor = '#090c20' } = {}) {
+  // depth: where the light layer sits. World art below it gets lit; characters
+  // above it stay as silhouettes against the light (and show their own glow).
+  attach(scene, { depth = 25 } = {}) {
     this.scene = scene;
     const { width, height } = TUNING.view;
+    const pad = TUNING.light.lightmapPad;
     this.scale = TUNING.light.lightmapScale;
-    this.cw = Math.ceil(width * this.scale);
-    this.ch = Math.ceil(height * this.scale);
-    this.darkColor = darkColor;
-
-    const mk = (key) => {
-      if (scene.textures.exists(key)) scene.textures.remove(key);
-      return scene.textures.createCanvas(key, this.cw, this.ch);
-    };
-    this.darkTex = mk('__lightmap_dark');
-    this.glowTex = mk('__lightmap_glow');
-    this.darkCtx = this.darkTex.getContext();
-    this.glowCtx = this.glowTex.getContext();
-
+    this.pad = pad;
+    this.areaW = width + pad * 2;
+    this.areaH = height + pad * 2;
+    this.cw = Math.ceil(this.areaW * this.scale);
+    this.ch = Math.ceil(this.areaH * this.scale);
+    if (scene.textures.exists('__lightlayer')) scene.textures.remove('__lightlayer');
+    this.tex = scene.textures.createCanvas('__lightlayer', this.cw, this.ch);
+    this.ctx = this.tex.getContext();
     this.sunCanvas = document.createElement('canvas');
     this.sunCanvas.width = this.cw;
     this.sunCanvas.height = this.ch;
     this.sunCtx = this.sunCanvas.getContext('2d');
-
-    this.darkImage = scene.add.image(0, 0, '__lightmap_dark').setOrigin(0).setScrollFactor(0)
-      .setDisplaySize(width, height).setDepth(30);
-    this.glowImage = scene.add.image(0, 0, '__lightmap_glow').setOrigin(0).setScrollFactor(0)
-      .setDisplaySize(width, height).setDepth(31).setBlendMode('ADD');
+    this.image = scene.add.image(0, 0, '__lightlayer').setOrigin(0).setDepth(depth)
+      .setDisplaySize(this.areaW, this.areaH).setBlendMode('ADD');
     this.gradCache = new Map();
   }
 
-  // Gradients sample the SAME falloff function the queries use (20 stops).
-  alphaGradient(ctx, R, kind) {
-    const key = `a${R}|${kind}`;
+  gradient(ctx, R, color, kind) {
+    const key = `${R}|${color.join(',')}|${kind}`;
     let g = this.gradCache.get(key);
     if (!g) {
       g = ctx.createRadialGradient(0, 0, 0, 0, 0, R);
-      for (let i = 0; i <= 20; i++) g.addColorStop(i / 20, `rgba(0,0,0,${falloffOf(kind, i / 20).toFixed(4)})`);
-      this.gradCache.set(key, g);
-    }
-    return g;
-  }
-
-  colorGradient(ctx, R, color, kind) {
-    const key = `c${R}|${color.join(',')}|${kind}`;
-    let g = this.gradCache.get(key);
-    if (!g) {
-      g = ctx.createRadialGradient(0, 0, 0, 0, 0, R);
-      for (let i = 0; i <= 20; i++) {
-        g.addColorStop(i / 20, `rgba(${color[0]},${color[1]},${color[2]},${falloffOf(kind, i / 20).toFixed(4)})`);
+      const steps = 32;
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        g.addColorStop(t, `rgba(${color[0]},${color[1]},${color[2]},${Math.min(1, falloffOf(kind, t) / (kind === 'glow' ? TUNING.light.glowMax : 1)).toFixed(4)})`);
       }
       this.gradCache.set(key, g);
     }
     return g;
   }
 
-  renderSunMask(vx, vy, vw, vh) {
+  renderSun(ox, oy) {
     const s = this.scale;
     const ctx = this.sunCtx;
     const c = this.sun.color;
@@ -506,11 +533,11 @@ export class LightingSystem {
     ctx.globalAlpha = 1;
     ctx.fillStyle = `rgb(${c[0]},${c[1]},${c[2]})`;
     ctx.fillRect(0, 0, this.cw, this.ch);
-    ctx.setTransform(s, 0, 0, s, -vx * s, -vy * s);
+    ctx.setTransform(s, 0, 0, s, -ox * s, -oy * s);
     ctx.globalCompositeOperation = 'destination-out';
     ctx.fillStyle = '#000';
     const R = this.sun.reach;
-    const vxR = -this.sun.dx * R, vyR = -this.sun.dy * R; // shadow direction (away from sun)
+    const vxR = -this.sun.dx * R, vyR = -this.sun.dy * R; // shadow direction (away from the sun)
     const shadowOf = (poly) => {
       const pts = [];
       for (let i = 0; i < poly.length; i += 2) {
@@ -524,11 +551,10 @@ export class LightingSystem {
       ctx.closePath();
       ctx.fill();
     };
-    // Any occluder up to R away in the sun's direction can shade the view.
-    const minx = vx - 40, maxx = vx + vw + R * Math.abs(this.sun.dx) + 40;
+    const minx = ox - 40, maxx = ox + this.areaW + R * Math.abs(this.sun.dx) + 40;
     for (const o of this.occluders) {
       if (o.x + o.w < minx || o.x > maxx) continue;
-      if (o.y > vy + vh + 40) continue;
+      if (o.y > oy + this.areaH + 40) continue;
       shadowOf(o.poly);
     }
     for (const o of this.dynamicOccluders) for (const p of o.polys) shadowOf(p);
@@ -537,81 +563,56 @@ export class LightingSystem {
   render(cam) {
     if (!this.scene) return;
     const s = this.scale;
-    const vx = cam.worldView.x, vy = cam.worldView.y, vw = cam.worldView.width, vh = cam.worldView.height;
-    const d = this.darkCtx, g = this.glowCtx;
+    const ox = Math.floor(cam.worldView.x - this.pad);
+    const oy = Math.floor(cam.worldView.y - this.pad);
+    const W = this.areaW, H = this.areaH;
+    const ctx = this.ctx;
+    const gain = TUNING.light.visualGain;
 
-    d.setTransform(1, 0, 0, 1, 0, 0);
-    d.globalCompositeOperation = 'source-over';
-    d.globalAlpha = 1;
-    d.fillStyle = this.darkColor;
-    d.fillRect(0, 0, this.cw, this.ch);
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    g.globalCompositeOperation = 'source-over';
-    g.globalAlpha = 1;
-    g.clearRect(0, 0, this.cw, this.ch);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.clearRect(0, 0, this.cw, this.ch);
+    ctx.globalCompositeOperation = 'lighter';
 
     if (this.sun.cur > 0) {
-      this.renderSunMask(vx, vy, vw, vh);
-      d.globalCompositeOperation = 'destination-out';
-      d.globalAlpha = this.sun.cur;
-      d.drawImage(this.sunCanvas, 0, 0);
-      g.globalCompositeOperation = 'lighter';
-      g.globalAlpha = this.sun.cur * this.sun.glow;
-      g.drawImage(this.sunCanvas, 0, 0);
+      this.renderSun(ox, oy);
+      ctx.globalAlpha = this.sun.cur * gain.sun;
+      ctx.drawImage(this.sunCanvas, 0, 0);
     }
 
-    d.globalCompositeOperation = 'destination-out';
-    g.globalCompositeOperation = 'lighter';
     for (const L of this.lights) {
       if (!L.enabled || L.cur <= 0) continue;
       const R = L.radius;
-      if (L.cx + R < vx || L.cx - R > vx + vw || L.cy + R < vy || L.cy - R > vy + vh) continue;
+      if (L.cx + R < ox || L.cx - R > ox + W || L.cy + R < oy || L.cy - R > oy + H) continue;
       const poly = this.polygonFor(L);
       if (poly.length < 6) continue;
-      const targets = L.harmless ? [g] : [d, g];
-      for (const ctx of targets) {
-        ctx.save();
-        ctx.setTransform(s, 0, 0, s, -vx * s, -vy * s);
+      ctx.save();
+      ctx.setTransform(s, 0, 0, s, -ox * s, -oy * s);
+      ctx.beginPath();
+      ctx.moveTo(poly[0], poly[1]);
+      for (let i = 2; i < poly.length; i += 2) ctx.lineTo(poly[i], poly[i + 1]);
+      ctx.closePath();
+      ctx.clip();
+      if (L.cone) {
+        const a = (L.cone.dir * Math.PI) / 180, sp = (L.cone.spread * Math.PI) / 180;
         ctx.beginPath();
-        ctx.moveTo(poly[0], poly[1]);
-        for (let i = 2; i < poly.length; i += 2) ctx.lineTo(poly[i], poly[i + 1]);
+        ctx.moveTo(L.cx, L.cy);
+        ctx.arc(L.cx, L.cy, R, a - sp, a + sp);
         ctx.closePath();
         ctx.clip();
-        if (L.cone) {
-          const a = (L.cone.dir * Math.PI) / 180, sp = (L.cone.spread * Math.PI) / 180;
-          ctx.beginPath();
-          ctx.moveTo(L.cx, L.cy);
-          ctx.arc(L.cx, L.cy, R, a - sp, a + sp);
-          ctx.closePath();
-          ctx.clip();
-        }
-        ctx.translate(L.cx, L.cy);
-        if (ctx === d) {
-          ctx.globalAlpha = L.cur;
-          ctx.fillStyle = this.alphaGradient(ctx, R, L.falloff);
-        } else {
-          ctx.globalAlpha = Math.min(1, L.cur * L.glow);
-          ctx.fillStyle = this.colorGradient(ctx, R, L.color, L.falloff);
-        }
-        ctx.fillRect(-R, -R, R * 2, R * 2);
-        ctx.restore();
       }
+      ctx.translate(L.cx, L.cy);
+      const kindGain = gain[L.kind] ?? gain.burn;
+      const glowScale = L.kind === 'glow' ? TUNING.light.glowMax : 1;
+      ctx.globalAlpha = Math.min(1, L.cur * kindGain * glowScale);
+      ctx.fillStyle = this.gradient(ctx, R, L.color, L.kind);
+      ctx.fillRect(-R, -R, R * 2, R * 2);
+      ctx.restore();
     }
 
-    d.globalCompositeOperation = 'source-over';
-    d.fillStyle = this.darkColor;
-    d.setTransform(s, 0, 0, s, -vx * s, -vy * s);
-    for (const z of this.shadeZones) {
-      if (z.x + z.w < vx || z.x > vx + vw || z.y + z.h < vy || z.y > vy + vh) continue;
-      d.globalAlpha = z.strength;
-      d.fillRect(z.x, z.y, z.w, z.h);
-    }
-    d.globalAlpha = 1;
-    d.setTransform(1, 0, 0, 1, 0, 0);
-
-    this.darkImage.setAlpha(TUNING.light.darkMax * (1 - this.ambient));
-    this.darkTex.refresh();
-    this.glowTex.refresh();
+    this.image.setPosition(ox, oy);
+    this.tex.refresh();
   }
 
   destroy() {

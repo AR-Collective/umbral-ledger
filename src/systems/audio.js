@@ -369,6 +369,14 @@ class AudioEngine {
         this.burst(t + 0.25, { type: 'lowpass', freq: 200, peak: 0.25, decay: 1.0, dest: d });
         break;
       }
+      case 'burnTick': {
+        // a hiss of steam and a dull thud: each second in the light
+        const d = this.out(pan, 0.25);
+        this.burst(t, { type: 'highpass', freq: 3200, attack: 0.004, peak: 0.28 * v, decay: 0.32, dest: d, sweepTo: 1400 });
+        this.burst(t, { type: 'bandpass', freq: 900, q: 1.2, attack: 0.002, peak: 0.16 * v, decay: 0.12, dest: d });
+        this.tone('sine', 82, t, 0.003, 0.32 * v, 0.22, d, 46);
+        break;
+      }
       case 'death': {
         const d = this.out(pan, 0.6);
         this.burst(t, { type: 'bandpass', freq: 3000, q: 0.7, attack: 0.05, peak: 0.25, decay: 0.9, dest: d, sweepTo: 300 });

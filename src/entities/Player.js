@@ -1,17 +1,25 @@
 // The player: a sliver of a man's soul, shaped like his shadow.
 //
-// The physics body is an invisible box. Everything you see (the body, the
-// violet rim, the eyes, the smoke) is drawn separately on top of it, so the
-// visuals can squash, lean and fray without changing the collision box.
+// The physics body is an invisible box. What you see is an animated sprite on
+// top of it, with two shader effects (WebGL only):
+//   glow     : a soft outline whose colour tells you your light state
+//              violet = Shade (safe), pale = Dim (seen at mid range), orange = Light (burning)
+//   dissolve : ember-edged holes. They grow as Substance drops, so your health
+//              is drawn on your body, and they glow while you burn.
+//
+// LIGHT DAMAGE IS TICKS: after a short grace, every second in Light takes one
+// chunk of Substance, with a red screen pulse and a burst of embers.
 
 import Phaser from 'phaser';
 import { TUNING, resistanceFor } from '../tuning.js';
 import { AUDIO } from '../systems/audio.js';
-import { GLOW_PAD } from '../textures.js';
 import { SHADE, DIM, LIGHT } from '../systems/lighting.js';
+import { feetOrigin } from '../art/characters.js';
+import { hasShaders } from '../systems/fx.js';
 
-const VIOLET = 0x9a6bff;
-const BURN = 0xff7a3a;
+const GLOW_SHADE = 0x8a5cff;
+const GLOW_DIM = 0xe0d4ff;
+const GLOW_LIGHT = 0xff6a1a;
 
 export class Player {
   constructor(scene, x, feetY) {
@@ -36,42 +44,57 @@ export class Player {
     this.sinceMerge = 99;
     this.wasOnFloor = true;
     this.prevVy = 0;
-    this.litT = 0;
-    this.dimT = 0;
     this.sinceDamage = 99;
-    this.burn = 0;
+    this.burnVis = 0;
+    this.flash = 0;
+    this.tickClock = null;     // seconds until the next burn tick; null = not exposed
+    this.outOfLight = 99;
     this.lightInfo = { value: 0, state: SHADE, fire: false };
     this.dead = false;
     this.frozen = false;
     this.landSquash = 0;
-    this.blinkT = 2 + Math.random() * 3;
     this.time = 0;
     this.noclip = false;
+    this.inCover = false;
+    this.dissolveT = 0;
 
     // ---- visuals ----
-    const pad = GLOW_PAD.shade_rim ?? 9;
-    this.rim = scene.add.image(x, feetY, 'shade_rim')
-      .setOrigin(0.5, (84 + pad) / (84 + pad * 2)).setDepth(39).setBlendMode('ADD').setTint(VIOLET).setAlpha(0.7);
-    this.sprite = scene.add.image(x, feetY, 'shade').setOrigin(0.5, 1).setDepth(40);
-    this.eyes = scene.add.image(x, feetY - 62, 'shade_eyes').setDepth(41).setBlendMode('ADD');
+    const [ox, oy] = feetOrigin('shade');
+    this.sprite = scene.add.sprite(x, feetY, 'shade', 0).setOrigin(ox, oy).setDepth(40);
+    this.sprite.play('shade_idle');
+    this.shaders = hasShaders(scene);
+    if (this.shaders) {
+      this.sprite.preFX.setPadding(18);
+      this.glow = this.sprite.preFX.addGlow(GLOW_SHADE, 3, 0, false, 0.1, 14);
+      this.sprite.setPostPipeline('Dissolve');
+      const pp = this.sprite.getPostPipeline('Dissolve');
+      this.dissolve = Array.isArray(pp) ? pp[0] : pp;
+    }
 
     this.wisps = scene.add.particles(0, 0, 'smoke', {
-      lifespan: 1100, speedY: { min: -40, max: -15 }, speedX: { min: -12, max: 12 },
-      scale: { start: 0.35, end: 0.9 }, alpha: { start: 0.45, end: 0 }, tint: 0x0d0918,
-      frequency: 70, quantity: 1, emitting: true,
-    }).setDepth(38);
+      lifespan: 1300, speedY: { min: -36, max: -12 }, speedX: { min: -14, max: 14 },
+      scale: { start: 0.22, end: 0.7 }, alpha: { start: 0.4, end: 0 }, tint: 0x0b0814,
+      frequency: 90, quantity: 1, emitting: true,
+    }).setDepth(39);
     this.wisps.startFollow(this.sprite, 0, -30);
-    this.embers = scene.add.particles(0, 0, 'spark', {
-      lifespan: 650, speedY: { min: -110, max: -40 }, speedX: { min: -40, max: 40 },
-      scale: { start: 1.1, end: 0.2 }, alpha: { start: 1, end: 0 }, tint: [0xffd08a, 0xff8a3d, 0xff5a1f],
-      blendMode: 'ADD', frequency: 40, quantity: 2, emitting: false,
+    this.embers = scene.add.particles(0, 0, 'ember', {
+      lifespan: { min: 500, max: 900 }, speedY: { min: -140, max: -50 }, speedX: { min: -40, max: 40 },
+      scale: { start: 1.1, end: 0.2 }, alpha: { start: 1, end: 0 }, rotate: { min: -20, max: 20 },
+      tint: [0xfff0b0, 0xffb040, 0xff6a1a], blendMode: 'ADD', frequency: 28, quantity: 2, emitting: false,
+      x: { min: -12, max: 12 }, y: { min: -40, max: 0 },
     }).setDepth(42);
-    this.embers.startFollow(this.sprite, 0, -36);
-    this.fray = scene.add.particles(0, 0, 'spark', {
-      lifespan: 500, speed: { min: 20, max: 70 }, scale: { start: 0.8, end: 0 }, alpha: { start: 0.9, end: 0 },
-      tint: 0xb48cff, blendMode: 'ADD', frequency: 120, quantity: 1, emitting: false,
-    }).setDepth(42);
-    this.fray.startFollow(this.sprite, 0, -36);
+    this.embers.startFollow(this.sprite, 0, -10);
+    this.burnSmoke = scene.add.particles(0, 0, 'smoke', {
+      lifespan: 1200, speedY: { min: -60, max: -25 }, speedX: { min: -12, max: 12 },
+      scale: { start: 0.25, end: 1.0 }, alpha: { start: 0.35, end: 0 }, tint: 0x2a1c18,
+      frequency: 70, emitting: false, x: { min: -8, max: 8 },
+    }).setDepth(41);
+    this.burnSmoke.startFollow(this.sprite, 0, -50);
+    this.tickBurst = scene.add.particles(0, 0, 'spark', {
+      lifespan: { min: 300, max: 700 }, speed: { min: 60, max: 220 }, angle: { min: 200, max: 340 },
+      scale: { start: 1.3, end: 0 }, alpha: { start: 1, end: 0 }, gravityY: 300,
+      tint: [0xffffff, 0xffd080, 0xff7a2a], blendMode: 'ADD', emitting: false,
+    }).setDepth(43);
   }
 
   // ------------- convenience getters used by the AI and the scene -------------
@@ -82,7 +105,8 @@ export class Player {
   get moving() { return Math.abs(this.body.velocity.x) > 30 || Math.abs(this.body.velocity.y) > 60; }
   get onFloor() { return this.body.blocked.down || this.body.touching.down; }
 
-  // Where the light is measured. Merged, your body is lower, so low cover protects you.
+  // Where the light is measured: the middle of the body and the head.
+  // Merged, your body is low, so low cover protects you.
   lightSamplePoints() {
     return [[this.x, this.y], [this.x, this.body.top + 8]];
   }
@@ -92,8 +116,16 @@ export class Player {
     if (m === this.merged) return;
     this.merged = m;
     const h = m ? T.mergedH : T.bodyH;
+    const bottom = this.body.bottom;
     this.body.setSize(T.bodyW, h, false);
     this.body.setOffset(0, T.bodyH - h);
+    // Keep the feet where they were. Shift the previous-frame position too:
+    // Arcade moves the Game Object by (position - prevFrame) after the step,
+    // so moving only body.y would also drag the zone down into the floor.
+    const dy = bottom - h - this.body.y;
+    this.body.y += dy;
+    this.body.prev.y += dy;
+    this.body.prevFrame.y += dy;
     if (m) AUDIO.play('merge', { vol: 0.7 });
   }
 
@@ -110,6 +142,22 @@ export class Player {
     this.body.setVelocity(0, 0);
   }
 
+  // Walk up small lips (cobbles, kerbs, low steps) instead of snagging on them.
+  tryStepUp(dir) {
+    const T = TUNING.player;
+    const b = this.body;
+    const blocked = dir > 0 ? (b.blocked.right || b.touching.right) : (b.blocked.left || b.touching.left);
+    if (!blocked || !this.onFloor) return;
+    for (let h = 4; h <= T.stepUp; h += 4) {
+      const nx = b.x + dir * 3;
+      if (!this.scene.solidOverlaps(nx, b.y - h, b.width, b.height - 1)) {
+        b.y -= h;
+        b.x += dir * 2;
+        return;
+      }
+    }
+  }
+
   // ------------------------------- movement -------------------------------
   update(dt, c) {
     const T = TUNING.player;
@@ -120,7 +168,7 @@ export class Player {
     this.strikeAnim -= dt;
     if (this.dead || this.frozen) {
       b.setVelocityX(0);
-      if (this.dead) b.setVelocityY(0);
+      if (this.dead) { b.setVelocityY(0); b.setAllowGravity(false); }
       this.animate(dt);
       return;
     }
@@ -134,6 +182,8 @@ export class Player {
       return;
     }
     b.setAllowGravity(this.dashT <= 0);
+    // falling pulls harder than rising: a snappier, less floaty jump
+    b.setGravityY(b.velocity.y > 0 ? TUNING.physics.gravity * (TUNING.physics.fallGravityMult - 1) : 0);
 
     const onFloor = this.onFloor;
     this.coyote = onFloor ? T.coyoteTime : this.coyote - dt;
@@ -168,6 +218,7 @@ export class Player {
       const vx = b.velocity.x;
       const step = accel * dt;
       b.setVelocityX(Math.abs(target - vx) <= step ? target : vx + Math.sign(target - vx) * step);
+      if (dir !== 0) this.tryStepUp(dir);
     }
 
     // Jumping (with coyote time and a buffer so it never eats an input).
@@ -195,14 +246,14 @@ export class Player {
     // Landing. Holding Merge as you land makes it silent.
     if (onFloor && !this.wasOnFloor) {
       const impact = this.prevVy;
-      this.landSquash = Math.min(0.3, impact / 2400);
+      this.landSquash = Math.min(0.22, impact / 3200);
       if (c.held('down')) {
         // soft landing, no noise
-      } else if (impact > 640) {
+      } else if (impact > 700) {
         this.scene.emitNoise(this.x, this.feetY, TUNING.noise.landHard, 'land');
         AUDIO.play('landHard');
         this.scene.landFx?.(this, true);
-      } else if (impact > 320) {
+      } else if (impact > 360) {
         this.scene.emitNoise(this.x, this.feetY, TUNING.noise.landSoft, 'land');
         AUDIO.play('land', { vol: 0.8 });
         this.scene.landFx?.(this, false);
@@ -214,6 +265,7 @@ export class Player {
     if (c.pressed('strike') && this.strikeCd <= 0) {
       this.strikeCd = T.strikeCooldown;
       this.strikeAnim = 0.22;
+      this.sprite.play('shade_strike');
       this.scene.tryStrike(this);
     }
 
@@ -226,120 +278,128 @@ export class Player {
     const R = resistanceFor(level);
     const L = TUNING.light;
     this.lightInfo = info;
-    let dmg = 0;
-    if (info.state === LIGHT) {
-      this.litT += dt;
-      this.dimT = 0;
-      if (this.litT > R.grace) {
-        const k = Math.min(1, (this.litT - R.grace) / R.rampTime);
-        dmg = (R.dpsStart + (R.dpsMax - R.dpsStart) * k) * (info.fire ? R.fireMult : 1);
+    const lit = info.state === LIGHT && !godMode;
+
+    if (lit) {
+      this.outOfLight = 0;
+      if (this.tickClock === null) this.tickClock = R.grace;
+      this.tickClock -= dt;
+      if (this.tickClock <= 0) {
+        this.tickClock += R.interval;
+        this.burnTick(R.tick * (info.fire ? R.fireMult : 1), info.fire);
       }
-    } else if (info.state === DIM && R.dimDps > 0) {
-      this.dimT += dt;
-      this.litT = Math.max(0, this.litT - dt * 2);
-      if (this.dimT > 0.5) dmg = R.dimDps;
     } else {
-      this.litT = Math.max(0, this.litT - dt * 3);
-      this.dimT = 0;
+      this.outOfLight += dt;
+      if (this.outOfLight > L.tickResetAfter) this.tickClock = null;
     }
-    if (godMode) dmg = 0;
-    if (dmg > 0) {
-      this.substance -= dmg * dt;
-      this.sinceDamage = 0;
-    } else {
-      this.sinceDamage += dt;
-      if (info.state === SHADE && this.sinceDamage > L.regenDelay) {
-        this.substance = Math.min(TUNING.player.maxSubstance, this.substance + L.regenPerSec * dt);
-      }
+
+    this.sinceDamage += dt;
+    if (!lit && info.state === SHADE && this.sinceDamage > L.regenDelay) {
+      this.substance = Math.min(TUNING.player.maxSubstance, this.substance + L.regenPerSec * dt);
     }
-    this.burn = dmg > 0 ? Math.min(1, dmg / R.dpsMax) : Math.max(0, this.burn - dt * 4);
-    return this.burn;
+
+    const target = lit ? 1 : 0;
+    this.burnVis += (target - this.burnVis) * Math.min(1, dt * (lit ? 10 : 3));
+    return this.burnVis;
+  }
+
+  burnTick(damage, fire) {
+    this.substance -= damage;
+    this.sinceDamage = 0;
+    this.flash = 1;
+    this.tickBurst.explode(fire ? 26 : 18, this.x, this.y - 6);
+    this.scene.onBurnTick?.(damage, fire);
   }
 
   // ------------------------------- visuals -------------------------------
   animate(dt) {
     const b = this.body;
-    const fx = b.center.x;
-    const fy = b.bottom;
-    const T = TUNING.player;
+    const s = this.sprite;
+    const fx = b.center.x, fy = b.bottom;
     const vx = b.velocity.x, vy = b.velocity.y;
     const onFloor = this.onFloor;
 
-    let sx = 1, sy = 1;
-    if (this.merged) { sx = 1.35; sy = 0.42; }
-    else if (!onFloor) {
-      const st = Math.max(-0.14, Math.min(0.16, -vy / 2200));
-      sy = 1 + st; sx = 1 - st * 0.6;
-    } else {
-      sy = 1 + Math.sin(this.time * 2.2) * 0.015;
+    // pick the animation
+    if (!this.dead) {
+      let anim;
+      if (this.strikeAnim > 0 && !this.merged) anim = 'shade_strike';
+      else if (this.merged) anim = Math.abs(vx) > 15 ? 'shade_mergeMove' : 'shade_merge';
+      else if (this.dashT > 0) anim = 'shade_dash';
+      else if (!onFloor && !this.noclip) anim = vy < -60 ? 'shade_rise' : 'shade_fall';
+      else if (Math.abs(vx) > 30) anim = 'shade_run';
+      else anim = 'shade_idle';
+      if (anim !== 'shade_strike' || s.anims.currentAnim?.key !== 'shade_strike') s.anims.play(anim, true);
+      if (anim === 'shade_run') s.anims.timeScale = Phaser.Math.Clamp(Math.abs(vx) / TUNING.player.runSpeed, 0.55, 1.3);
+      else s.anims.timeScale = 1;
     }
+
+    // small squash on landing
+    let sy = 1, sx = 1;
     if (this.landSquash > 0) {
-      sy *= 1 - this.landSquash; sx *= 1 + this.landSquash * 0.7;
-      this.landSquash = Math.max(0, this.landSquash - dt * 1.6);
+      sy = 1 - this.landSquash; sx = 1 + this.landSquash * 0.6;
+      this.landSquash = Math.max(0, this.landSquash - dt * 1.4);
     }
-    if (this.dashT > 0) { sx *= 1.3; sy *= 0.85; }
-    if (this.strikeAnim > 0) { sx *= 1.15; }
-    // smooth toward the target shape
-    const k = Math.min(1, dt * 18);
-    this.sx = (this.sx ?? 1) + (sx - (this.sx ?? 1)) * k;
-    this.sy = (this.sy ?? 1) + (sy - (this.sy ?? 1)) * k;
+    s.setPosition(fx, fy).setScale(sx, sy).setFlipX(this.facing < 0);
 
-    const lean = Phaser.Math.Clamp(vx / T.runSpeed, -1.4, 1.4) * 0.12 + (this.strikeAnim > 0 ? this.facing * 0.25 : 0);
-    const flip = this.facing < 0;
-
-    this.sprite.setPosition(fx, fy).setScale(this.sx, this.sy).setRotation(lean).setFlipX(flip);
-    this.rim.setPosition(fx, fy).setScale(this.sx * 1.04, this.sy * 1.03).setRotation(lean).setFlipX(flip);
-
-    // Rim: violet when safe, ember orange when burning. It frays as Substance drops.
-    const health = Phaser.Math.Clamp(this.substance / T.maxSubstance, 0, 1);
-    const jitter = (1 - health) * 3.5;
-    this.rim.x += (Math.random() - 0.5) * jitter;
-    this.rim.y += (Math.random() - 0.5) * jitter;
-    this.rim.setTint(this.burn > 0.05 ? BURN : VIOLET);
+    // light-state glow and the burn shader
+    const health = Phaser.Math.Clamp(this.substance / TUNING.player.maxSubstance, 0, 1);
+    this.flash = Math.max(0, this.flash - dt * 4.5);
     const state = this.lightInfo.state;
-    let rimAlpha = 0.35 + 0.45 * health;
-    if (this.merged && state === SHADE) rimAlpha *= 0.55;
-    // Tucked behind cover and merged: drawn faint, so it reads as "hidden behind it".
-    const hiddenLook = this.merged && this.inCover;
-    if (hiddenLook) rimAlpha *= 0.6;
-    this.rim.setAlpha(this.dead ? 0 : rimAlpha);
-    this.sprite.setAlpha(this.dead ? 0 : hiddenLook ? 0.32 : this.merged && state === SHADE ? 0.6 : 1);
+    const hidden = this.merged && (this.inCover || state === SHADE);
+    if (this.glow) {
+      if (this.burnVis > 0.08) {
+        this.glow.color = GLOW_LIGHT;
+        this.glow.outerStrength = 4 + this.burnVis * 4 + Math.sin(this.time * 18) * 1.2 + this.flash * 6;
+      } else if (state === DIM) {
+        this.glow.color = GLOW_DIM;
+        this.glow.outerStrength = 3.5 + Math.sin(this.time * 6) * 0.6;
+      } else {
+        this.glow.color = GLOW_SHADE;
+        this.glow.outerStrength = hidden ? 1.4 : 2.6 + (1 - health) * 1.5;
+      }
+    } else {
+      // canvas fallback: tint instead of glow
+      if (this.burnVis > 0.08) s.setTint(0xff9a60); else s.clearTint();
+    }
+    if (this.dissolve) {
+      if (!this.dead) this.dissolve.amount = (1 - health) * 0.45;
+      this.dissolve.burn = Math.max(this.burnVis, this.dead && this.deathFire ? 1 : 0);
+      this.dissolve.flash = this.flash;
+    }
+    s.setAlpha(this.dead && !this.dissolve ? 0 : hidden ? (this.inCover ? 0.45 : 0.7) : 1);
 
-    // Eyes sit in the hood and follow the squash.
-    const headH = 62 * this.sy;
-    this.blinkT -= dt;
-    let eyeScaleY = 1;
-    if (this.blinkT < 0) { eyeScaleY = 0.15; if (this.blinkT < -0.12) this.blinkT = 2 + Math.random() * 4; }
-    this.eyes.setPosition(fx + this.facing * 3 + Math.sin(lean) * headH, fy - headH * Math.cos(lean))
-      .setScale(1, eyeScaleY).setFlipX(flip)
-      .setAlpha(this.dead ? 0 : this.merged ? 0.55 : 0.95);
-
-    this.embers.emitting = !this.dead && this.burn > 0.05;
-    this.embers.frequency = 70 - this.burn * 50;
-    this.fray.emitting = !this.dead && health < 0.45;
+    this.embers.emitting = !this.dead && this.burnVis > 0.15;
+    this.burnSmoke.emitting = !this.dead && this.burnVis > 0.15;
     this.wisps.emitting = !this.dead;
   }
 
   die(cause) {
     if (this.dead) return;
     this.dead = true;
+    this.deathFire = cause === 'burned' || cause === 'fire';
     this.body.setVelocity(0, 0);
     this.body.setAllowGravity(false);
     const s = this.scene;
     s.add.particles(this.x, this.y, 'smoke', {
-      lifespan: 1400, speed: { min: 30, max: 160 }, scale: { start: 0.5, end: 1.6 }, alpha: { start: 0.7, end: 0 },
-      tint: 0x0d0918, quantity: 40, emitting: false,
-    }).setDepth(43).explode(40);
-    s.add.particles(this.x, this.y, 'spark', {
-      lifespan: 900, speed: { min: 60, max: 260 }, scale: { start: 1.2, end: 0 }, alpha: { start: 1, end: 0 },
-      tint: cause === 'burned' || cause === 'fire' ? [0xffd08a, 0xff8a3d] : [0xb48cff, 0x6b4bd8], blendMode: 'ADD',
-      quantity: 50, emitting: false,
-    }).setDepth(43).explode(50);
+      lifespan: 1500, speed: { min: 20, max: 120 }, scale: { start: 0.4, end: 1.5 }, alpha: { start: 0.6, end: 0 },
+      tint: this.deathFire ? 0x2a1c18 : 0x120c1e, quantity: 36, emitting: false,
+    }).setDepth(43).explode(36);
+    s.add.particles(this.x, this.y, this.deathFire ? 'ember' : 'spark', {
+      lifespan: { min: 600, max: 1400 }, speed: { min: 40, max: 200 }, angle: { min: 200, max: 340 }, gravityY: -60,
+      scale: { start: 1.2, end: 0 }, alpha: { start: 1, end: 0 },
+      tint: this.deathFire ? [0xfff0b0, 0xffa040, 0xff6020] : [0xb48cff, 0x6b4bd8], blendMode: 'ADD',
+      quantity: 60, emitting: false,
+    }).setDepth(43).explode(60);
+    if (this.dissolve) {
+      s.tweens.add({ targets: this.dissolve, amount: 1.15, duration: 950, ease: 'Quad.easeIn' });
+    } else {
+      s.tweens.add({ targets: this.sprite, alpha: 0, duration: 600 });
+    }
     this.animate(0);
   }
 
   destroy() {
-    this.wisps.destroy(); this.embers.destroy(); this.fray.destroy();
-    this.sprite.destroy(); this.rim.destroy(); this.eyes.destroy(); this.zone.destroy();
+    this.wisps.destroy(); this.embers.destroy(); this.burnSmoke.destroy(); this.tickBurst.destroy();
+    this.sprite.destroy(); this.zone.destroy();
   }
 }

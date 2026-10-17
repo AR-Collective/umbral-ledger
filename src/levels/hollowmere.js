@@ -12,7 +12,7 @@
 //   3. The Square         midway Stillpoint, find Maren and Edrin, escort them,
 //                         and the HEAVY branch: ring the bell or not.
 //   4. The Mill Road      watched road whose guards depend on the bell's outcome,
-//                         and a mill wheel whose spokes throw turning shadows.
+//                         and a windmill whose sails throw turning shadows.
 //   5. Dawn               Stillpoint before the climax, then the chase: the
 //                         Wick-Mother behind you, the sun rising ahead.
 // =====================================================================
@@ -28,6 +28,7 @@ const G = 760;          // street level
 const CELLAR = 960;     // cellar floor
 const WIDTH = 11200;
 const GATE_X = 10920;
+const MILL = { x: 6470, hubY: G - 278 };
 
 // The Heavy branch at the bell. Odds and modifiers are the rules; story.js has the words.
 const BELL = {
@@ -72,15 +73,25 @@ function drawMillWatchers(scene, outcome, instant) {
   }
 }
 
-function chimney(b, x, roofY) {
-  const s = b.s;
-  s.add.tileSprite(x, roofY - 60, 34, 60, 'tex_stone').setOrigin(0).setDepth(12).setTint(0x7a7090);
-  b.screen(x, roofY - 60, 34, 60);
-}
+// Cover props. The occluder boxes match the painted silhouettes, not the canvas.
+function haystack(b, x) { b.prop('haystack', x, G, { occlude: [-62, -78, 124, 78] }); }
+// A cart counts as cover down to the ground (you crouch between its wheels).
+function cart(b, x, flip = false) { b.prop('cart', x, G, { occlude: flip ? [-54, -66, 124, 66] : [-70, -66, 124, 66], flip }); }
+function barrel(b, x, y = G) { b.prop('barrel', x, y, { occlude: [-18, -52, 36, 52] }); }
+function crate(b, x, y = G, solid = false) { b.prop('crate', x, y, { occlude: [-26, -54, 52, 54], solid }); }
+function tree(b, x, o = {}) { b.decor('tree_big', x, G + 8, { depth: 11, scale: o.scale ?? 1, flip: o.flip, tint: o.tint ?? 0xc8c8dc }); }
 
-function haystack(b, x) { b.prop('haystack', x, G, { occlude: [-55, -80, 110, 80] }); }
-function cart(b, x) { b.prop('cart', x, G, { occlude: [-60, -50, 120, 50] }); }
-function barrel(b, x, y = G) { b.prop('barrel', x, y, { occlude: [-17, -48, 34, 48] }); }
+// a chimney on a flat roof: a light blocker you can hide behind
+function chimney(b, x, roofY) { b.stack(x, roofY, 34, 60, { depth: 13 }); }
+
+// small linear helpers for the dawn grade
+const lerp = (a, b, k) => a + (b - a) * k;
+function lerpTint(a, b, k) {
+  const r = Math.round(lerp((a >> 16) & 255, (b >> 16) & 255, k));
+  const g = Math.round(lerp((a >> 8) & 255, (b >> 8) & 255, k));
+  const bl = Math.round(lerp(a & 255, b & 255, k));
+  return (r << 16) | (g << 8) | bl;
+}
 
 export default {
   id: 'hollowmere',
@@ -91,6 +102,8 @@ export default {
   ambience: 'night',
   fog: true,
   start: 'h1',
+  horizonY: G,
+  grade: { shadow: [0.78, 0.86, 1.2], high: [1.14, 1.0, 0.84], vig: 0.55 },
 
   // Checkpoints: guaranteed at the start, midway and before the climax, plus
   // one hidden on the low road as an exploration reward (design doc 4.8).
@@ -104,21 +117,22 @@ export default {
 
   spawns: [
     { id: 'hd_lamp', label: 'Outskirts: lamp and low wall', x: 520, y: G },
-    { id: 'hd_firstlm', label: 'First Lanternman', x: 930, y: G },
+    { id: 'hd_firstlm', label: 'SHOWCASE: first Lanternman', x: 930, y: G },
     { id: 'hd_swing', label: 'Swinging lamps', x: 1760, y: G },
     { id: 'hd_fork', label: 'The fork (roofs or cellars)', x: 2150, y: G },
-    { id: 'hd_roof', label: 'High road (rooftops)', x: 2500, y: 600 },
+    { id: 'hd_roof', label: 'High road (rooftops)', x: 2500, y: 580 },
     { id: 'hd_cellar', label: 'Low road (cellars)', x: 2360, y: CELLAR },
     { id: 'hd_chapel', label: 'Chapel (find the survivors)', x: 4180, y: G },
-    { id: 'hd_escort', label: 'Square with survivors', x: 4420, y: G, flags: { survivors: 'follow', 'trig:chapel': true, 'trig:squareEnter': true } },
+    { id: 'hd_escort', label: 'SHOWCASE: square with survivors', x: 4420, y: G, flags: { survivors: 'follow', 'trig:chapel': true, 'trig:squareEnter': true } },
     { id: 'hd_bell', label: 'The bell (Heavy branch)', x: 5160, y: G, flags: { survivors: 'follow', 'trig:chapel': true, 'trig:squareEnter': true } },
     { id: 'hd_mill', label: 'Mill road', x: 5620, y: G, flags: { survivors: 'follow', 'trig:chapel': true } },
-    { id: 'hd_wheel', label: 'Mill wheel shadows', x: 6300, y: G, flags: { survivors: 'follow', 'trig:chapel': true } },
-    { id: 'hd_dawn', label: 'Dawn chase (Wick-Mother)', x: 7040, y: G, flags: { survivors: 'follow', 'trig:chapel': true } },
+    { id: 'hd_wheel', label: 'Windmill shadows', x: 6200, y: G, flags: { survivors: 'follow', 'trig:chapel': true } },
+    { id: 'hd_dawn', label: 'SHOWCASE: dawn chase (Wick-Mother)', x: 7040, y: G, flags: { survivors: 'follow', 'trig:chapel': true } },
   ],
 
   build(b, scene) {
     const d = GAME.data;
+    const s = b.s;
     // ---- Light branches: rolled once per run, saved, never re-rolled on reload ----
     if (!d.branches['hollowmere.fork']) {
       d.branches['hollowmere.fork'] = { outcome: rollLight(d.seed, 'hollowmere.fork', ['high', 'low']) };
@@ -131,94 +145,99 @@ export default {
 
     // ================= 1. THE OUTSKIRTS (0 - 2250) =================
     b.solid(0, G, 2250, 320, { style: 'earth' });
-    b.solid(0, 260, 40, 500, { style: 'stone', edge: false });
+    b.stack(0, G, 40, 500, { cover: false, depth: 20 });
     b.fog(0, 2400, fogBase);
     for (const sp of this.stillpoints) b.stillpoint(sp);
-    b.prop('signpost', 360, G, { depth: 9 });
-    b.prop('fence', 470, G, { depth: 9 });
+    tree(b, 300, { scale: 1.05 });
+    b.prop('signpost', 360, G, { depth: 17 });
+    b.prop('fence', 460, G, { depth: 17 });
     b.trigger({ id: 'arrive', x: 40, y: 0, w: 600, h: 1000, lines: ['h_arrive1', 'h_arrive2', 'h_fog_hint'] });
 
     // A lamp you must pass, with a low wall to Merge behind.
-    b.house(560, G, 200, 190, { windows: [[30, 40, false], [130, 40, true]], seed: 1, windowRadius: 120, windowIntensity: 0.4 });
-    b.solid(690, G - 52, 50, 52, { style: 'rubble' });
-    b.lamppost(800, G, { radius: 250 });
+    b.house(560, G, 200, 190, { windows: [[30, 44, false], [140, 44, true]], seed: 1, windowRadius: 150 });
+    b.stack(690, G, 50, 52);
+    b.lamppost(800, G, { radius: 270 });
     b.trigger({ id: 'lamp', x: 540, y: 0, w: 60, h: 1000, lines: ['h_lamp', 'h_cover_hint'] });
 
     // The first Lanternman steps out of a doorway as you arrive at the cart.
-    b.house(1060, G, 260, 220, { windows: [[40, 50, false], [190, 50, false]], door: [110, 54], seed: 2 });
+    tree(b, 920, { scale: 0.8, flip: true });
+    b.house(1060, G, 260, 220, { windows: [[40, 50, false], [194, 50, false]], door: [110, 54], seed: 2 });
     cart(b, 1000);
     barrel(b, 1420);
     b.watcher({ id: 'lm1', type: 'lanternman', x: 1195, y: G, patrol: [1480, 960], wait: 1.6, facing: -1, bounds: [900, 1490], dormant: true });
     b.trigger({ id: 'firstLM', x: 940, y: 0, w: 50, h: 1000, event: 'firstLanternman', lines: ['h_first_lm1', 'h_first_lm2', 'h_first_lm3'] });
 
     // A flat-roofed house: an escape route upward and the way on. Lanternmen do not climb.
-    b.solid(1440, G - 50, 50, 50, { style: 'wood' });
-    b.house(1500, G, 200, 150, { roof: 'flat', windows: [[80, 40, false]], seed: 3, solid: true });
+    crate(b, 1465, G, true);
+    b.house(1500, G, 200, 140, { roof: 'flat', windows: [[84, 40, false]], seed: 3, solid: true });
     b.ledge(1730, 520, 100);
     b.hourShard({ x: 1780, y: 488 });
     b.trigger({ id: 'shardHint', x: 1500, y: 0, w: 80, h: 620, lines: ['h_shard_hint'] });
 
     // Two lanterns swinging on a frame. Watch the rhythm.
-    b.prop('gallows', 1975, G, { depth: 9 });
-    b.hangingLamp(1910, 572, { length: 100, amp: 40, period: 3.4, phase: 0, radius: 170, intensity: 0.9 });
-    b.hangingLamp(2040, 572, { length: 100, amp: 40, period: 3.4, phase: Math.PI, radius: 170, intensity: 0.9 });
+    b.prop('lampframe', 1975, G, { depth: 15 });
+    b.hangingLamp(1915, G - 206, { length: 100, amp: 40, period: 3.4, phase: 0, radius: 180, intensity: 0.92 });
+    b.hangingLamp(2035, G - 206, { length: 100, amp: 40, period: 3.4, phase: Math.PI, radius: 180, intensity: 0.92 });
     b.trigger({ id: 'swing', x: 1760, y: 0, w: 60, h: 1000, lines: ['h_swing'] });
 
     // ================= 2. THE FORK: a diamond (2250 - 3900) =================
-    b.prop('signpost', 2190, G, { depth: 9, flip: true });
+    b.prop('signpost', 2190, G, { depth: 17, flip: true });
     b.trigger({ id: 'fork', x: 2120, y: 0, w: 60, h: 1000, lines: ['h_fork', 'h_fork_whisper'] });
     // the hole down to the cellars is between 2250 and 2310
     // the stack up to the rooftops
-    b.solid(2330, G - 50, 50, 50, { style: 'wood' });
-    b.solid(2380, G - 110, 70, 110, { style: 'wood' });
+    crate(b, 2355, G, true);
+    b.solid(2380, G - 110, 70, 110, { style: 'wood', top: false });
 
     // ---- the low road: cellars (2250 - 3900, floor at 960) ----
-    b.solid(2250, CELLAR, 1700, 120, { style: 'stone' });
-    b.solid(2310, G, 730, 40, { style: 'stone' });           // cellar ceiling, part 1
-    b.solid(3100, G, 680, 40, { style: 'stone' });           // part 2 (a hole above at 3040-3100 from the alley)
-    b.light({ x: 2280, y: 870, radius: 90, intensity: 0.3, color: [140, 150, 200], harmless: true, glow: 0.4 });
-    b.solid(2560, 900, 30, 60, { style: 'stone' });
-    b.candle(2575, 900, { radius: 140, intensity: 0.85 });
-    b.solid(3000, 905, 30, 55, { style: 'stone' });
-    b.candle(3015, 905, { radius: 140, intensity: 0.85 });
+    b.backwall(2250, G, 1650, CELLAR - G, 'stone_body', { tint: 0x4a4658 });
+    b.solid(2250, CELLAR, 1700, 120, { style: 'cellar' });
+    b.solid(2310, G, 730, 40, { style: 'stone', top: 'cobble' });        // cellar ceiling, part 1 (and the street above)
+    b.solid(3100, G, 680, 40, { style: 'stone', top: 'cobble' });        // part 2 (a hole above at 3040-3100 from the alley)
+    b.light({ x: 2280, y: 850, radius: 110, intensity: 0.7, color: [140, 150, 200], kind: 'glow' });
+    b.solid(2560, 900, 30, 60, { style: 'stone', top: false });
+    b.candle(2575, 900, { radius: 150, intensity: 0.9 });
+    b.solid(3000, 905, 30, 55, { style: 'stone', top: false });
+    b.candle(3015, 905, { radius: 150, intensity: 0.9 });
     barrel(b, 2760, CELLAR);
     barrel(b, 2800, CELLAR);
+    crate(b, 2700, CELLAR);
     barrel(b, 3240, CELLAR);
     barrel(b, 3640, CELLAR);
-    b.shade(3330, 800, 120, 160, 0.85);
-    b.solid(3540, 905, 30, 55, { style: 'stone' });
-    b.candle(3555, 905, { radius: 140, intensity: 0.85 });
+    crate(b, 3690, CELLAR);
+    b.solid(3540, 905, 30, 55, { style: 'stone', top: false });
+    b.candle(3555, 905, { radius: 150, intensity: 0.9 });
     // stairs up into the square
-    b.solid(3790, 900, 50, 60, { style: 'wood' });
-    b.solid(3840, 840, 60, 120, { style: 'wood' });
+    b.solid(3790, 900, 50, 60, { style: 'wood', top: false });
+    b.solid(3840, 840, 60, 120, { style: 'wood', top: false });
     b.trigger({ id: 'cellar', x: 2250, y: 800, w: 400, h: 200, lines: ['h_cellar'], event: 'tookLowRoad' });
     if (fork === 'low') {
       b.watcher({ id: 'lm_c', type: 'lanternman', x: 2900, y: CELLAR, patrol: [2680, 3200], wait: 1.6, facing: 1, bounds: [2330, 3700] });
     }
 
     // ---- the high road: rooftops ----
-    b.house(2450, G, 250, 160, { roof: 'flat', seed: 4, solid: true, windows: [[60, 40, false], [160, 40, false]] });
-    b.solid(2700, 560, 60, 200, { style: 'rubble' });         // a collapsed barricade, part of the roof path
-    b.house(2760, G, 260, 170, { roof: 'flat', seed: 5, solid: true, windows: [[50, 50, false], [170, 50, true]], windowLights: false });
-    chimney(b, 2900, 590);
-    b.light({ x: 2985, y: 560, radius: 150, intensity: 0.75, color: [255, 170, 90], flicker: 0.04, glow: 0.5 });
-    b.house(3120, G, 300, 180, { roof: 'flat', seed: 6, solid: true, windows: [[60, 50, false], [200, 50, false]] });
-    chimney(b, 3240, 580);
-    b.house(3420, G, 360, 150, { roof: 'flat', seed: 7, solid: true, windows: [[120, 40, false]] });
-    chimney(b, 3600, 610);
-    b.trigger({ id: 'roofs', x: 2450, y: 300, w: 300, h: 300, event: 'tookHighRoad' });
+    b.house(2450, G, 250, 160, { roof: 'flat', seed: 4, solid: true, windows: [[60, 40, false], [164, 40, false]] });
+    b.solid(2700, 560, 60, 200, { style: 'rubble', top: false });         // a collapsed barricade, part of the roof path
+    b.house(2760, G, 260, 170, { roof: 'flat', seed: 5, solid: true, windows: [[50, 50, false], [176, 50, true]], windowLights: false });
+    chimney(b, 2900, G - 186);
+    // a brazier left burning on the roof: real fire
+    b.candle(2985, G - 186, { stick: false, radius: 160, intensity: 0.9, flameScale: 1.1, flare: 0.5 });
+    b.house(3120, G, 300, 180, { roof: 'flat', seed: 6, solid: true, windows: [[60, 50, false], [204, 50, false]] });
+    chimney(b, 3240, G - 196);
+    b.house(3420, G, 360, 150, { roof: 'flat', seed: 7, solid: true, windows: [[120, 40, false], [250, 40, true]], windowLights: false });
+    chimney(b, 3600, G - 166);
+    b.trigger({ id: 'roofs', x: 2450, y: 300, w: 300, h: 290, event: 'tookHighRoad' });
     if (fork === 'high') {
-      b.watcher({ id: 'lm_r', type: 'lanternman', x: 3180, y: 580, patrol: [3150, 3400], wait: 1.4, facing: 1, bounds: [3130, 3410] });
+      b.watcher({ id: 'lm_r', type: 'lanternman', x: 3180, y: G - 196, patrol: [3150, 3400], wait: 1.4, facing: 1, bounds: [3130, 3410] });
     }
 
     // ================= 3. THE SQUARE (3900 - 5550) =================
-    b.solid(3900, G, WIDTH - 3900, 320, { style: 'earth' });
+    b.solid(3900, G, WIDTH - 3900, 320, { style: 'stone', top: 'cobble' });
     b.fog(3900, 5600, fogBase * 0.55);
-    b.prop('well', 4085, G, { occlude: [-45, -60, 90, 60] });
+    b.prop('well', 4085, G, { occlude: [-50, -48, 100, 48], depth: 17 });
     b.trigger({ id: 'squareEnter', x: 3920, y: 0, w: 120, h: 1000, event: 'squareEnter' });
 
     // The chapel where Maren and Edrin are hiding.
-    b.house(4200, G, 260, 250, { windows: [[40, 60, false], [200, 60, false]], door: [105, 56], seed: 8 });
+    b.prop('chapel', 4330, G, { depth: 12 });
     b.trigger({ id: 'chapel', x: 4140, y: 0, w: 60, h: 1000, lines: ['h_square1'] });
     b.survivor({ id: 'maren', name: 'Maren', texture: 'maren', x: 4318, y: G, state: 'hiding', facing: 1 });
     b.survivor({ id: 'edrin', name: 'Edrin', texture: 'edrin', x: 4346, y: G, state: 'hiding', facing: -1 });
@@ -229,23 +248,19 @@ export default {
     });
 
     // The square itself: a lamp, a walking Lanternman, a sentry that turns.
-    b.house(4520, G, 220, 200, { windows: [[30, 50, true], [150, 50, false]], seed: 9, windowRadius: 120, windowIntensity: 0.45 });
-    b.house(4960, G, 240, 210, { windows: [[60, 60, false], [170, 60, true]], seed: 10, windowRadius: 120, windowIntensity: 0.45, door: [100, 50] });
-    b.lamppost(4760, G, { radius: 240 });
+    tree(b, 4560, { scale: 0.9 });
+    b.house(4540, G, 220, 200, { windows: [[30, 50, true], [156, 50, false]], seed: 9, windowRadius: 150 });
+    b.house(4960, G, 240, 210, { windows: [[60, 60, false], [170, 60, true]], seed: 10, windowRadius: 150, door: [100, 50] });
+    b.lamppost(4760, G, { radius: 260 });
     cart(b, 4620);
-    cart(b, 4950);
+    cart(b, 4950, true);
     barrel(b, 5190);
     b.watcher({ id: 'lm_sq1', type: 'lanternman', x: 4700, y: G, patrol: [4560, 5060], wait: 1.6, facing: 1, bounds: [4480, 5170] });
     b.watcher({ id: 'lm_sq2', type: 'lanternman', x: 5300, y: G, patrol: [5300], facing: -1, turnEvery: 4.5, bounds: [5200, 5340] });
 
     // The bell tower. Its door recess is a hiding spot.
-    const s = b.s;
-    s.add.tileSprite(5390, 300, 110, 460, 'tex_stone').setOrigin(0).setDepth(5).setTint(0x5a5670);
-    s.add.triangle(5445, 300, -70, 0, 0, -90, 70, 0, 0x0d0c13).setDepth(5);
-    s.add.image(5445, 400, 'bell').setOrigin(0.5, 1).setDepth(6);
-    s.add.rectangle(5442, 400, 3, 300, 0x3a2c1c).setOrigin(0.5, 0).setDepth(6);
-    s.add.rectangle(5418, G - 84, 56, 84, 0x050409).setOrigin(0).setDepth(6);
-    b.shade(5418, G - 84, 56, 84, 0.9);
+    b.prop('belltower', 5445, G, { depth: 12 });
+    b.screen(5420, G - 84, 50, 84, { tag: 'recess' });
     b.trigger({ id: 'bell', x: 5140, y: 0, w: 60, h: 1000, lines: ['h_bell1', 'h_bell_whisper', 'h_bell_hint'] });
     b.interact({
       id: 'bell', x: 5446, y: G, label: 'Look at what the bell could bring', promptH: 120,
@@ -257,21 +272,22 @@ export default {
 
     // ================= 4. THE MILL ROAD (5550 - 7000) =================
     b.fog(5600, 7100, fogBase * 0.45);
-    b.prop('fence', 5560, G, { depth: 9 });
+    b.prop('fence', 5560, G, { depth: 17 });
     b.trigger({ id: 'mill', x: 5600, y: 0, w: 60, h: 1000, lines: ['h_millroad'] });
-    b.house(5700, G, 230, 200, { windows: [[40, 50, false], [160, 50, true]], seed: 11, windowRadius: 120, windowIntensity: 0.45, door: [100, 50] });
+    b.house(5700, G, 230, 200, { windows: [[40, 50, false], [164, 50, true]], seed: 11, windowRadius: 150, door: [100, 50] });
     cart(b, 5960);
     barrel(b, 6120);
     b.watcher({ id: 'lm_m1', type: 'lanternman', x: 5800, y: G, patrol: [5700, 6040], wait: 1.5, facing: 1, bounds: [5620, 6100], tag: 'mill' });
     b.watcher({ id: 'lm_m2', type: 'lanternman', x: 6200, y: G, patrol: [6200], facing: -1, turnEvery: 5, bounds: [6140, 6260], tag: 'mill' });
 
-    // The mill: a lamp at the hub of a turning wheel. The spokes throw shadow blades.
-    b.house(6340, G, 300, 300, { roof: 'gable', seed: 12, windows: [[200, 70, false]] });
-    this.wheel = { cx: 6470, cy: 620, r: 140, angle: 0, speed: 0.55 };
-    this.wheelOcc = s.lighting.addDynamicOccluder('wheel');
+    // The windmill: the miller's lamp hangs at the hub. The turning sails throw shadow blades.
+    b.prop('windmill', MILL.x, G, { depth: 12 });
+    this.wheel = { cx: MILL.x, cy: MILL.hubY, r: 150, angle: 0.3, speed: 0.55 };
+    this.wheelOcc = s.lighting.addDynamicOccluder('sails');
     this.wheelGfx = s.add.graphics().setDepth(13);
-    b.light({ x: 6470, y: 620, radius: 330, intensity: 0.95, color: [255, 176, 96], flicker: 0.03, glow: 0.55 });
-    s.add.image(6470, 620, 'wheel_hub').setDepth(14);
+    b.light({ x: MILL.x, y: MILL.hubY + 14, radius: 520, intensity: 0.95, color: [255, 176, 96], flicker: 0.03 });
+    s.add.image(MILL.x, MILL.hubY + 2, 'lantern').setOrigin(0.5, 0.05).setDepth(41);
+    b.flare(MILL.x, MILL.hubY + 20, 0xffb060, 0.8, 0.85);
     b.trigger({ id: 'wheel', x: 6180, y: 0, w: 60, h: 1000, lines: ['h_wheel'] });
     b.watcher({ id: 'lm_m3', type: 'lanternman', x: 6700, y: G, patrol: [6680, 6880], wait: 1.4, facing: 1, bounds: [6650, 6920], tag: 'mill' });
 
@@ -284,28 +300,30 @@ export default {
     // Everything here is cover that casts a sun shadow. At first light the
     // shadows are long and overlap; as the sun climbs they shrink apart and
     // the strips of sunlight between them grow. The chase is that squeeze.
+    tree(b, 6950, { scale: 1.1, flip: true });
     b.trigger({ id: 'dawn', x: 7120, y: 0, w: 60, h: 1000, event: 'dawn', requires: 'survivors' });
     const DAWN_ROW = [
       ['hay', 7350], ['wall', 7650, 110], ['cottage', 7900, 160, 140], ['hay', 8350],
       ['cart', 8620], ['wall', 8880, 120], ['hay', 9180], ['cottage', 9420, 150, 130],
       ['fence', 9700], ['wall', 9900, 110], ['hay', 10200], ['cart', 10450], ['wall', 10700, 100],
     ];
+    for (const x of [7550, 8200, 9050, 9620, 10350]) tree(b, x, { scale: 0.85 + (x % 3) * 0.1, flip: x % 2 === 0 });
     DAWN_ROW.forEach(([kind, x, w, h], i) => {
       if (kind === 'hay') haystack(b, x);
       else if (kind === 'cart') cart(b, x);
-      else if (kind === 'fence') b.solid(x, G - 44, 24, 44, { style: 'wood' });
-      else if (kind === 'wall') {
-        b.s.add.tileSprite(x, G - w, 40, w, 'tex_stone').setOrigin(0).setDepth(9).setTint(0x7a7090);
-        b.screen(x, G - w, 40, w);
-      } else if (kind === 'cottage') {
-        b.house(x, G, w, h, { seed: 20 + i, windows: [[w * 0.4, 50, false]], windowLights: false });
+      else if (kind === 'fence') {
+        b.prop('fence', x + 12, G, { depth: 17 });
+        b.solid(x, G - 44, 24, 44, { visible: false });
+      } else if (kind === 'wall') b.stack(x, G, 40, w);
+      else if (kind === 'cottage') {
+        b.house(x, G, w, h, { seed: 20 + i, windows: [[w * 0.4, 50, false]], windowLights: false, smoke: false });
         b.screen(x, G - h, w, h);
       }
     });
-    b.prop('gate_arch', GATE_X, G, { depth: 9 });
-    b.light({ x: GATE_X, y: G - 120, radius: 220, intensity: 0.6, color: [150, 190, 255], harmless: true, glow: 0.7 });
+    b.prop('gate_arch', GATE_X, G, { depth: 12 });
+    b.light({ x: GATE_X, y: G - 120, radius: 240, intensity: 0.7, color: [150, 190, 255], kind: 'safe' });
     b.trigger({ id: 'gate', x: GATE_X - 30, y: 0, w: 200, h: 1000, event: 'reachGate', requires: 'chase' });
-    b.solid(WIDTH - 40, 260, 40, 500, { style: 'stone', edge: false });
+    b.stack(WIDTH - 40, G, 40, 500, { cover: false, depth: 20 });
   },
 
   onStart(scene) {
@@ -322,43 +340,73 @@ export default {
       this.goBackSaid = true;
     }
 
-    // Mill wheel: turn the spokes and feed them to the lighting as moving occluders.
+    // Windmill: turn the sails and feed them to the lighting as moving occluders.
     const w = this.wheel;
     if (w) {
       w.angle += w.speed * dt;
       const polys = [];
       const g = this.wheelGfx;
       g.clear();
-      g.lineStyle(10, 0x17120e, 1);
-      g.strokeCircle(w.cx, w.cy, w.r);
       for (let i = 0; i < 4; i++) {
         const a = w.angle + (i * Math.PI) / 2;
         const ca = Math.cos(a), sa = Math.sin(a);
-        const nx = -sa * 9, ny = ca * 9;
-        const x0 = w.cx + ca * 26, y0 = w.cy + sa * 26;
-        const x1 = w.cx + ca * w.r, y1 = w.cy + sa * w.r;
-        const poly = [x0 + nx, y0 + ny, x1 + nx, y1 + ny, x1 - nx, y1 - ny, x0 - nx, y0 - ny];
-        polys.push(poly);
-        g.fillStyle(0x17120e, 1);
-        g.fillPoints([{ x: poly[0], y: poly[1] }, { x: poly[2], y: poly[3] }, { x: poly[4], y: poly[5] }, { x: poly[6], y: poly[7] }], true);
+        const nx = -sa, ny = ca;     // the side the sail cloth hangs on
+        const P = (r, off) => [w.cx + ca * r + nx * off, w.cy + sa * r + ny * off];
+        // the spar
+        const spar = [...P(20, -3), ...P(w.r + 8, -3), ...P(w.r + 8, 3), ...P(20, 3)];
+        // the lattice sail on one side of it
+        const sail = [...P(54, 3), ...P(w.r, 3), ...P(w.r, 30), ...P(60, 26)];
+        polys.push(spar, sail);
+        g.fillStyle(0x1c1620, 0.92);
+        g.fillPoints(toPts(sail), true);
+        g.lineStyle(1.5, 0x0c0a0e, 1);
+        for (let r = 70; r < w.r; r += 18) {
+          const [x0, y0] = P(r, 3), [x1, y1] = P(r, 28);
+          g.lineBetween(x0, y0, x1, y1);
+        }
+        const [ex0, ey0] = P(56, 18), [ex1, ey1] = P(w.r, 18);
+        g.lineBetween(ex0, ey0, ex1, ey1);
+        g.lineStyle(1, 0x9fb4ff, 0.25);
+        const [rx0, ry0] = P(60, 27), [rx1, ry1] = P(w.r, 30);
+        g.lineBetween(rx0, ry0, rx1, ry1);
+        g.fillStyle(0x120d0c, 1);
+        g.fillPoints(toPts(spar), true);
       }
+      g.fillStyle(0x0c0a0e, 1);
+      g.fillCircle(w.cx, w.cy, 9);
       this.wheelOcc.setPolys(polys);
     }
 
-    // Dawn: the sun climbs, shadows shorten, the fog burns away.
+    // Dawn: the sun climbs, shadows shorten, the fog burns away, the sky warms.
     const c = scene.chase;
     if (c && !scene.ended) {
       const D = TUNING.dawn;
       c.t += dt;
       const k = Math.min(1, c.t / D.duration);
+      const rise = Math.min(1, c.t / 6);
       scene.lighting.setSun({
         elevation: D.startElevation + (D.endElevation - D.startElevation) * k,
         intensity: D.sunIntensity * Math.min(1, c.t / 4),
       });
-      scene.lighting.ambient = 0.12 + 0.1 * k;
       scene.fogMul = Math.max(0, 1 - k * 1.6);
-      scene.decor.dawnSky?.setAlpha(Math.min(1, c.t / 6) * (0.4 + 0.6 * k));
-      scene.decor.stars?.setAlpha(1 - Math.min(1, c.t / 6));
+      const dec = scene.decor;
+      dec.dawnSky?.setAlpha(rise * (0.4 + 0.6 * k));
+      dec.stars?.setAlpha(1 - rise);
+      dec.moon?.setAlpha(1 - rise * 0.85);
+      dec.moonHalo?.setAlpha(0.22 * (1 - rise));
+      if (dec.sun) {
+        if (c.sunY0 === undefined) c.sunY0 = dec.sun.y;
+        dec.sun.setAlpha(Math.min(1, c.t / 3) * 0.95);
+        dec.sun.y = c.sunY0 - 260 * k;
+        dec.sun.setScale(4 + 2 * rise);
+      }
+      const warm = lerpTint(0xffffff, 0xffc7a0, rise * (0.6 + 0.4 * k));
+      for (const L of dec.layers ?? []) L.setTint(warm);
+      if (scene.grade) {
+        const gp = scene.grade.params;
+        gp.shadow = [lerp(0.78, 0.92, rise), lerp(0.86, 0.86, rise), lerp(1.2, 1.04, rise)];
+        gp.high = [lerp(1.14, 1.2, rise), lerp(1.0, 1.04, rise), lerp(0.84, 0.82, rise)];
+      }
       scene.clockRate = 0.6 - 0.4 * k;
       // Survivors who were told to wait far behind are not left to the Wick-Mother.
       for (const sv of scene.survivors) {
@@ -416,10 +464,10 @@ export default {
       const wick = scene.wick;
       if (wick) {
         wick.active = false;
-        scene.tweens.add({ targets: [wick.sprite, wick.crown, wick.crownGlow], alpha: 0, duration: 2500 });
-        wick.flames.emitting = false;
-        wick.light.enabled = false;
-        wick.cone.enabled = false;
+        scene.tweens.add({ targets: [wick.sprite, wick.crown, wick.crownGlow].filter(Boolean), alpha: 0, duration: 2500 });
+        if (wick.flames) wick.flames.emitting = false;
+        if (wick.light) wick.light.enabled = false;
+        if (wick.cone) wick.cone.enabled = false;
       }
       scene.clockOn = false;
       GAME.addLedger('saved');
@@ -437,3 +485,9 @@ export default {
     },
   },
 };
+
+function toPts(flat) {
+  const out = [];
+  for (let i = 0; i < flat.length; i += 2) out.push({ x: flat[i], y: flat[i + 1] });
+  return out;
+}

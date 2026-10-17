@@ -4,9 +4,12 @@
 // perceive survivors with the same rules as the player (minus Merge). They
 // crouch when you Merge, and you can tell them to wait or follow (Q).
 
+import Phaser from 'phaser';
 import { TUNING } from '../tuning.js';
 import { BARKS } from '../story.js';
 import { SHADE } from '../systems/lighting.js';
+import { feetOrigin } from '../art/characters.js';
+import { hasShaders } from '../systems/fx.js';
 
 export class Survivor {
   constructor(scene, def, index) {
@@ -28,15 +31,18 @@ export class Survivor {
     this.body.setMaxVelocity(1000, TUNING.physics.maxFall);
     this.body.setCollideWorldBounds(true);
 
-    // A faint warm outline drawn over the dark: you can always see the people you protect.
-    const pad = 9;
-    this.rim = scene.add.image(def.x, def.y, `${def.texture}_rim`).setOrigin(0.5, (def.texture === 'maren' ? 70 + pad : 74 + pad) / ((def.texture === 'maren' ? 70 : 74) + pad * 2))
-      .setDepth(44).setBlendMode('ADD').setTint(0xff9a5a).setAlpha(0.15);
-    this.sprite = scene.add.image(def.x, def.y, def.texture).setOrigin(0.5, 1).setDepth(20);
-    // The shadow can sense their warmth: a small heartbeat glow drawn over the dark,
-    // so you can always find the people you are protecting.
-    this.warmth = scene.add.image(def.x, def.y - 40, 'softglow').setDepth(45).setBlendMode('ADD')
-      .setTint(0xffa060).setScale(0.32).setAlpha(0.5);
+    this.key = def.texture;
+    const [ox, oy] = feetOrigin(this.key);
+    this.sprite = scene.add.sprite(def.x, def.y, this.key, 0).setOrigin(ox, oy).setDepth(35);
+    this.sprite.play(`${this.key}_crouch`);
+    // A faint warm outline: the shadow can sense their warmth, so you can always
+    // find the people you are protecting, even in the dark.
+    if (hasShaders(scene)) {
+      this.sprite.preFX.setPadding(10);
+      this.glow = this.sprite.preFX.addGlow(0xffa060, 2, 0, false, 0.1, 10);
+    }
+    this.warmth = scene.add.image(def.x, def.y - 40, 'softglow').setDepth(44).setBlendMode('ADD')
+      .setTint(0xffa060).setScale(0.3).setAlpha(0.4);
   }
 
   get x() { return this.body.center.x; }
@@ -106,13 +112,15 @@ export class Survivor {
   animate() {
     const fx = this.body.center.x, fy = this.body.bottom;
     const moving = this.moving;
-    const bob = moving ? Math.abs(Math.sin(this.time * 9)) * 2 : 0;
-    const sy = this.crouched ? 0.72 : 1;
-    this.sprite.setPosition(fx, fy - bob).setScale(1, sy).setFlipX(this.facing < 0);
+    const anim = this.crouched ? (moving ? 'crouchWalk' : 'crouch') : (moving ? 'walk' : 'idle');
+    this.sprite.anims.play(`${this.key}_${anim}`, true);
+    if (anim === 'walk') this.sprite.anims.timeScale = Phaser.Math.Clamp(Math.abs(this.body.velocity.x) / TUNING.survivor.walk, 0.6, 1.4);
+    else this.sprite.anims.timeScale = 1;
+    this.sprite.setPosition(fx, fy).setFlipX(this.facing < 0);
     this.sprite.setVisible(this.alive);
-    this.rim.setPosition(fx, fy - bob).setScale(1, sy).setFlipX(this.facing < 0).setVisible(this.alive && this.state !== 'safe');
-    const pulse = 0.4 + 0.25 * Math.max(0, Math.sin(this.time * 6.5));
-    this.warmth.setPosition(fx, fy - 40 * sy).setAlpha(this.alive && this.state !== 'safe' ? pulse : 0);
+    const pulse = 0.3 + 0.2 * Math.max(0, Math.sin(this.time * 6.5));
+    if (this.glow) this.glow.outerStrength = this.state === 'safe' ? 0 : 1.5 + pulse * 2;
+    this.warmth.setPosition(fx, fy - (this.crouched ? 26 : 44)).setAlpha(this.alive && this.state !== 'safe' ? pulse : 0);
   }
 
   // Where light and sight are measured. Crouched, they are low enough to hide behind a cart.
@@ -125,11 +133,12 @@ export class Survivor {
     return {
       id: this.id, kind: 'survivor', x: this.x, y: this.sampleY(), feetY: this.feetY,
       light: this.light, crouched: this.crouched, merged: false, moving: this.moving,
-      hidden: this.hidden, alive: this.alive,
+      hidden: this.hidden, alive: this.alive, inCover: this.inCover,
+      points: [[this.x, this.sampleY()], [this.x, this.body.top + 8]],
     };
   }
 
   destroy() {
-    this.sprite.destroy(); this.rim.destroy(); this.warmth.destroy(); this.zone.destroy();
+    this.sprite.destroy(); this.warmth.destroy(); this.zone.destroy();
   }
 }

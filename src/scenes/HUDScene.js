@@ -8,7 +8,7 @@
 // =====================================================================
 
 import Phaser from 'phaser';
-import { TUNING } from '../tuning.js';
+import { TUNING, resistanceFor } from '../tuning.js';
 import { GAME } from '../systems/state.js';
 import { AUDIO } from '../systems/audio.js';
 import { bus } from '../systems/bus.js';
@@ -38,8 +38,13 @@ export class HUDScene extends Phaser.Scene {
     this.sandIcons = [];
     for (let i = 0; i < 3; i++) this.sandIcons.push(this.add.image(34 + i * 22, 78, 'icon_sand'));
     this.glyph = this.add.image(W - 40, 38, 'glyph_shade').setScale(1.2);
-    this.barBg = this.add.rectangle(24, 104, 164, 8, 0x000000, 0.6).setOrigin(0);
-    this.bar = this.add.rectangle(26, 106, 160, 4, 0x9a6bff, 1).setOrigin(0);
+    // Substance: shown whenever you are hurt. The notches mark one burn tick each,
+    // so you can count how many seconds of light you can still survive.
+    this.barGfx = this.add.graphics();
+    this.barAlpha = 0;
+    this.barFlash = 0;
+    // red pulse at the screen edges for every burn tick
+    this.redPulse = this.add.image(0, 0, 'vignette_red').setOrigin(0).setDisplaySize(W, H).setAlpha(0).setDepth(-1);
 
     // ---- subtitles (bottom center) ----
     this.subName = this.add.text(W / 2, H - 104, '', { fontFamily: TITLE, fontSize: '15px', color: GOLD, letterSpacing: 4 }).setOrigin(0.5);
@@ -88,6 +93,7 @@ export class HUDScene extends Phaser.Scene {
       'branch:open': (d) => this.openBranch(d),
       'branch:result': (r) => this.branchResult(r),
       'pause:open': (tab) => this.openPause(tab),
+      burnTick: () => this.onBurnTick(),
     };
     for (const [k, fn] of Object.entries(handlers)) bus.on(k, fn);
     this.events.once('shutdown', () => { for (const [k, fn] of Object.entries(handlers)) bus.off(k, fn); });
@@ -95,8 +101,41 @@ export class HUDScene extends Phaser.Scene {
 
   gs() { return this.scene.get('Game'); }
 
+  onBurnTick() {
+    this.tweens.killTweensOf(this.redPulse);
+    this.redPulse.setAlpha(0.9);
+    this.tweens.add({ targets: this.redPulse, alpha: 0, duration: TUNING.light.flashTime * 1000, ease: 'Quad.easeOut' });
+    this.barFlash = 1;
+    this.barAlpha = 1;
+  }
+
+  drawSubstanceBar(dt, p, y) {
+    const health = Math.max(0, p.substance / TUNING.player.maxSubstance);
+    const want = health < 0.995 || p.burnVis > 0.05 || this.gs()?.settings?.fullHud ? 1 : 0;
+    this.barAlpha += (want - this.barAlpha) * Math.min(1, dt * (want ? 8 : 1.5));
+    this.barFlash = Math.max(0, this.barFlash - dt * 3);
+    const g = this.barGfx;
+    g.clear();
+    if (this.barAlpha < 0.01) return;
+    const x = 24, w = 168, h = 7;
+    g.fillStyle(0x000000, 0.6 * this.barAlpha);
+    g.fillRoundedRect(x - 3, y - 3, w + 6, h + 6, 4);
+    const col = p.burnVis > 0.05 ? 0xff7a3a : 0x9a6bff;
+    g.fillStyle(col, this.barAlpha);
+    g.fillRoundedRect(x, y, Math.max(2, w * health), h, 3);
+    if (this.barFlash > 0) {
+      g.fillStyle(0xffffff, this.barFlash * 0.8 * this.barAlpha);
+      g.fillRoundedRect(x, y, Math.max(2, w * health), h, 3);
+    }
+    const tick = resistanceFor(GAME.data.fragments).tick;
+    g.fillStyle(0x000000, 0.8 * this.barAlpha);
+    for (let v = tick; v < TUNING.player.maxSubstance; v += tick) g.fillRect(x + (w * v) / TUNING.player.maxSubstance - 1, y - 1, 2, h + 2);
+  }
+
   resetOverlays() {
-    this.tweens.killTweensOf([this.deathShade, this.deathText, this.threadText, this.hint, this.hintBg]);
+    this.tweens.killTweensOf([this.deathShade, this.deathText, this.threadText, this.hint, this.hintBg, this.redPulse]);
+    this.redPulse.setAlpha(0);
+    this.barAlpha = 0;
     this.tweens.killTweensOf(this.toastText); this.toastText.setAlpha(0);
     this.hint.setAlpha(0); this.hintBg.setAlpha(0); this.hintTimer = 0;
     this.deathShade.setAlpha(0); this.deathText.setAlpha(0); this.threadText.setAlpha(0);
@@ -194,10 +233,7 @@ export class HUDScene extends Phaser.Scene {
     if (!showThreads) this.sandIcons.forEach((ic) => ic.setY(36)); else this.sandIcons.forEach((ic) => ic.setY(78));
     const st = p.lightInfo.state;
     this.glyph.setTexture(st === 'light' ? 'glyph_light' : st === 'dim' ? 'glyph_dim' : 'glyph_shade');
-    const full = gs.settings.fullHud;
-    const health = Math.max(0, p.substance / TUNING.player.maxSubstance);
-    this.barBg.setVisible(full).setY(showThreads ? 104 : 62);
-    this.bar.setVisible(full).setY(showThreads ? 106 : 64).setScale(health, 1).setFillStyle(p.burn > 0.05 ? 0xff7a3a : 0x9a6bff);
+    this.drawSubstanceBar(dt, p, showThreads ? 104 : 62);
 
     // The conversation queue. Entity lines are subtitles with a typewriter;
     // anyone else speaks in the world and the queue waits for them.
@@ -422,7 +458,7 @@ export class HUDScene extends Phaser.Scene {
       return [
         ['Sound: ' + (s.muted ? 'off' : 'on'), () => { s.muted = !s.muted; AUDIO.setMuted(s.muted); }],
         ['Screen shake: ' + (s.shake ? 'on' : 'off'), () => { s.shake = !s.shake; }],
-        ['Full HUD: ' + (s.fullHud ? 'on' : 'off'), () => { s.fullHud = !s.fullHud; }],
+        ['Always show Substance: ' + (s.fullHud ? 'on' : 'off'), () => { s.fullHud = !s.fullHud; }],
         ['Back', () => { this.pView = 'menu'; this.pSel = 0; }],
       ];
     }

@@ -12,62 +12,81 @@ export const TUNING = {
   view: { width: 1280, height: 720 },
 
   physics: {
-    gravity: 1600,       // pixels per second squared
-    maxFall: 900,        // terminal falling speed
+    gravity: 1900,          // pixels per second squared while rising
+    fallGravityMult: 1.45,  // falling pulls harder than rising: jumps feel snappy, not floaty
+    maxFall: 1050,
   },
 
   player: {
-    bodyW: 26, bodyH: 52,         // collision box while standing
-    mergedH: 30,                  // collision box height while merged into the shade
-    runSpeed: 240,
-    mergedSpeed: 70,
-    groundAccel: 2200, groundDecel: 2800, airAccel: 1400,
-    jumpVelocity: 680,            // about 144 px high, about 200 px across at full speed
-    jumpCutVelocity: 430,         // releasing jump early cuts the arc here (a tap still hops about 58 px)
+    bodyW: 24, bodyH: 56,         // collision box while standing
+    mergedH: 26,                  // collision box height while merged into the shade
+    runSpeed: 232,
+    mergedSpeed: 74,
+    groundAccel: 2600, groundDecel: 3400, airAccel: 1800,
+    jumpVelocity: 720,            // about 136 px high
+    jumpCutVelocity: 380,         // releasing jump early cuts the arc here (a tap still hops)
     coyoteTime: 0.10,             // you can still jump this long after walking off a ledge
     jumpBuffer: 0.12,             // pressing jump this early before landing still counts
-    dashSpeed: 560, dashTime: 0.16, dashCooldown: 0.9,
-    strikeRange: 46, strikeCooldown: 0.5,
+    stepUp: 18,                   // walk up ledges this tall without jumping (no snagging on small lips)
+    dashSpeed: 600, dashTime: 0.15, dashCooldown: 0.85,
+    strikeRange: 50, strikeCooldown: 0.45,
     ambushWindow: 0.35,           // striking within this many seconds of leaving Merge counts as an Ambush
     maxSubstance: 100,
-    interactRange: 70,
+    interactRange: 72,
   },
 
-  // Light damage. "resistance" is indexed by how many soul fragments have returned.
-  // Level 0 is the very start: the shadow has almost no tolerance for light.
-  // Each returned fragment moves one step down the table.
+  // ---------------------------------------------------------------
+  // LIGHT. Every light has a bright CORE and a faint HALO.
+  //   Core  = Light: burns you, and watchers see you from far away.
+  //   Halo  = Dim:   no damage, but watchers see you at mid range.
+  //   Dark  = Shade: safe; merged in shade you are invisible.
+  // The renderer draws exactly these zones, so what you see is what hurts.
+  // ---------------------------------------------------------------
   light: {
-    ambient: { prologue: 0.07, hollowmere: 0.12 },
-    darkMax: 0.8,           // how strongly an unlit area is darkened on screen (0 to 1)
-    shadeMax: 0.28,         // light value below this is Shade
-    dimMax: 0.55,           // below this is Dim, at or above is Light
-    lightmapScale: 0.5,     // light is rendered at half resolution (soft edges, cheaper)
+    burnAt: 0.5,            // one light contributing this much = Light
+    burnTotal: 0.8,         // or all lights together this much = Light
+    dimAt: 0.1,             // below this total = Shade
+    shape: {                // the falloff curve, as fractions of a light's radius
+      coreEnd: 0.58,        // the bright core ends here...
+      edgeEnd: 0.64,        // ...and has dropped to the halo by here (a visible edge)
+      coreBottom: 0.74,     // brightness at the outer edge of the core
+      halo: 0.24,           // brightness where the halo starts (fades to 0 at the radius)
+    },
+    glowMax: 0.3,           // "glow" lights (lit windows) never get brighter than this: they never burn
+    occluderInset: 10,      // light soaks this far into walls and floors, so surfaces get a lit rim
+    lightmapScale: 0.5,     // the light layer is drawn at half resolution (soft edges, cheaper)
+    lightmapPad: 140,       // drawn this far past the screen edges so fast camera moves never show a seam
+    visualGain: { burn: 0.68, beam: 0.6, glow: 0.75, safe: 0.55, sun: 0.42 },
+
+    // Light Resistance: one row per returned soul fragment. Row 0 is the very start.
+    // In Light you take one TICK of damage per interval (with a red flash), after a short grace.
     resistance: [
-      // grace: seconds in Light before burning starts
-      // dpsStart/dpsMax: burn per second at the start of exposure and after rampTime
-      // dimDps: Dim also hurts while resistance is this low
-      { grace: 0.30, dpsStart: 26, dpsMax: 62, rampTime: 1.4, dimDps: 7, fireMult: 1.6 },
-      { grace: 0.40, dpsStart: 22, dpsMax: 52, rampTime: 1.6, dimDps: 4, fireMult: 1.5 },
-      { grace: 0.50, dpsStart: 18, dpsMax: 44, rampTime: 1.8, dimDps: 0, fireMult: 1.5 },
-      { grace: 0.60, dpsStart: 15, dpsMax: 36, rampTime: 2.0, dimDps: 0, fireMult: 1.4 },
-      { grace: 0.70, dpsStart: 12, dpsMax: 30, rampTime: 2.2, dimDps: 0, fireMult: 1.4 },
-      { grace: 0.80, dpsStart: 10, dpsMax: 25, rampTime: 2.4, dimDps: 0, fireMult: 1.3 },
-      { grace: 0.90, dpsStart: 8,  dpsMax: 20, rampTime: 2.6, dimDps: 0, fireMult: 1.3 },
-      { grace: 1.00, dpsStart: 6,  dpsMax: 16, rampTime: 2.8, dimDps: 0, fireMult: 1.2 },
+      { grace: 0.35, interval: 1.0, tick: 34, fireMult: 1.5 },  // 3 ticks (about 2.4 s) kill you
+      { grace: 0.40, interval: 1.0, tick: 28, fireMult: 1.5 },
+      { grace: 0.45, interval: 1.0, tick: 24, fireMult: 1.4 },
+      { grace: 0.50, interval: 1.0, tick: 20, fireMult: 1.4 },
+      { grace: 0.55, interval: 1.0, tick: 17, fireMult: 1.3 },
+      { grace: 0.60, interval: 1.0, tick: 14, fireMult: 1.3 },
+      { grace: 0.65, interval: 1.0, tick: 12, fireMult: 1.2 },
+      { grace: 0.70, interval: 1.0, tick: 10, fireMult: 1.2 },
     ],
-    regenDelay: 1.0,        // seconds without damage before Substance regrows in Shade
-    regenPerSec: 22,
+    tickResetAfter: 0.5,    // leave the light this long and the next exposure starts a fresh grace
+    regenDelay: 1.2,        // seconds without damage before Substance regrows in Shade
+    regenPerSec: 24,
+    flashTime: 0.45,        // how long the red screen pulse of a damage tick lasts
   },
 
   stealth: {
     // How far a watcher can see you, by the light YOU are standing in.
-    range: { light: 380, dim: 250, shade: 130 },
-    adjacent: 40,                // they notice you this close even outside the cone (needs line of sight)
-    cone: 38, alertCone: 65,     // half-angle of the vision cone in degrees
+    range: { light: 400, dim: 260, shade: 110 },
+    cone: 40, alertCone: 70,     // half-angle of the vision cone in degrees
+    // Near sense: this close, a watcher notices you whatever the light (you are
+    // practically touching). Only merging INSIDE cover (a crate, cart, pillar) hides you.
+    near: { front: 72, back: 36, height: 80, fillTime: 0.22 },
     // Merging changes how visible you are, per light state. 0 means invisible.
-    merge: { light: 0.9, dim: 0.55, shade: 0.0 },
+    merge: { light: 1.0, dim: 0.5, shade: 0.0 },
     // Seconds to fill the detection meter at medium distance, per light state.
-    fillTime: { light: 0.55, dim: 1.1, shade: 1.8 },
+    fillTime: { light: 0.5, dim: 1.0, shade: 1.8 },
     movingMult: 1.25, stillMult: 0.8,
     searchMult: 1.5,             // already-searching watchers spot you faster
     suspiciousAt: 0.35,          // meter level that triggers the "?" state
@@ -79,7 +98,7 @@ export const TUNING = {
     callRadius: 340,             // an alert watcher wakes others this close
     fogVision: 0.45,             // full fog cuts vision range by this fraction
     survivorCrouchMult: 0.55,
-    coneShowDistance: 420,       // vision cones are drawn when you are this close to a watcher
+    coneShowDistance: 440,       // vision cones are drawn when you are this close to a watcher
   },
 
   noise: {
@@ -87,16 +106,18 @@ export const TUNING = {
   },
 
   enemies: {
+    // eyeH: eye height above the feet. The lantern's glow core (about 70 px) burns
+    // and reveals anyone at the bearer's feet, so nobody can hide under a lantern.
     lanternman: {
-      walk: 62, chase: 270, eyeH: 58, grab: 30, killable: true,
-      lantern: { radius: 270, intensity: 0.92, spread: 42, glowRadius: 95, glowIntensity: 0.72 },
+      walk: 62, chase: 270, eyeH: 96, grab: 34, killable: true,
+      lantern: { radius: 310, intensity: 0.95, spread: 34, glowRadius: 125, glowIntensity: 0.92 },
     },
     guardian: {
-      walk: 55, chase: 175, eyeH: 74, grab: 32, killable: false,
-      lantern: { radius: 300, intensity: 0.9, spread: 36, glowRadius: 110, glowIntensity: 0.7 },
+      walk: 55, chase: 175, eyeH: 128, grab: 36, killable: false,
+      lantern: { radius: 330, intensity: 0.95, spread: 30, glowRadius: 135, glowIntensity: 0.9 },
     },
     acolyte: {
-      walk: 40, chase: 150, eyeH: 40, grab: 26, killable: true, lantern: null,
+      walk: 40, chase: 150, eyeH: 46, grab: 28, killable: true, lantern: null,
     },
   },
 
@@ -106,11 +127,11 @@ export const TUNING = {
     speed: 205, catchUpSpeed: 270, catchUpDistance: 520,
     lungeEvery: [3.5, 5.5], lungeTell: 0.8, lungeDistance: 230, lungeTime: 0.5,
     lungeRange: 560,
-    lightRadius: 420, lightIntensity: 0.85, coneRadius: 700, coneSpread: 30, coneIntensity: 0.95, coneDir: 48,
+    lightRadius: 430, lightIntensity: 0.9, coneRadius: 720, coneSpread: 28, coneIntensity: 0.95, coneDir: 48,
     startBehind: 430, startBehindUnlucky: 320,
   },
 
-  survivor: { walk: 190, crouchWalk: 70, followGap: 52, hop: 560, giveUpDistance: 700 },
+  survivor: { walk: 190, crouchWalk: 70, followGap: 52, hop: 600, giveUpDistance: 700 },
 
   foresight: {
     sipSeconds: 3,          // how far ahead a Sip looks
@@ -123,6 +144,14 @@ export const TUNING = {
     startElevation: 12, endElevation: 45,  // sun angle in degrees during the chase
     duration: 26,                          // seconds from first light to full morning
     sunIntensity: 0.9,
+  },
+
+  camera: {
+    lerpX: 0.11, lerpY: 0.07,
+    lookAhead: 130,          // the camera leads you in the direction you face
+    lookAheadRate: 2.2,
+    offsetY: 170,            // your feet sit this far below the middle of the screen (about 3/4 down)
+    groundFollow: true,      // the camera tracks the floor you stand on, not every jump
   },
 
   threads: { perWorld: 3 },

@@ -12,7 +12,8 @@
     />
     <style>
       html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
-      #game { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+      /* Phaser centres the canvas itself (autoCenter). The container must not centre it a second time. */
+      #game { position: fixed; inset: 0; overflow: hidden; }
       #game canvas { display: block; }
     </style>
   </head>

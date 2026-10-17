@@ -26,6 +26,7 @@ import { GAME } from '../systems/state.js';
 import { AUDIO } from '../systems/audio.js';
 import { bus } from '../systems/bus.js';
 import { DEV, saveDev } from '../dev/devFlags.js';
+import { hasShaders } from '../systems/fx.js';
 import { LINES, DEATH_TEXT, THREAD_TEXT, TOASTS, COMBOS, BRANCH_TEXT, WHISPERS } from '../story.js';
 import * as BR from '../systems/branches.js';
 
@@ -57,8 +58,10 @@ export class GameScene extends Phaser.Scene {
     this.survivors = [];
     this.fogZones = [];
     this.swingers = [];
+    this.flares = [];
     this.noiseRings = [];
     this.decor = {};
+    this.drifters = [];
 
     this.simTime = 0;
     this.dying = false;
@@ -71,14 +74,14 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, level.width, level.height);
     this.cameras.main.setBackgroundColor('#000000');
 
-    this.lighting = new LightingSystem({ ambient: TUNING.light.ambient[level.id] ?? 0.1, worldW: level.width, worldH: level.height });
+    this.lighting = new LightingSystem({ worldW: level.width, worldH: level.height });
     this.buildBackground(level);
-    this.edgeGfx = this.add.graphics().setDepth(33);
+    this.edgeGfx = this.add.graphics().setDepth(21);
 
     const builder = new LevelBuilder(this);
     level.build(builder, this);
-    this.lighting.attach(this);
-    this.buildFog(level);
+    this.lighting.attach(this, { depth: 25 });
+    this.buildAtmosphere(level);
 
     // ---- spawn ----
     const spawn = this.findSpawn(this.spawnId);
@@ -101,17 +104,27 @@ export class GameScene extends Phaser.Scene {
     for (const sv of this.survivors) this.physics.add.collider(sv.zone, this.solids);
 
     // ---- camera ----
+    // The camera follows a target that tracks the floor you stand on (not every
+    // jump) and leads a little in the direction you face.
     const cam = this.cameras.main;
-    cam.startFollow(this.player.zone, false, 0.09, 0.12, 0, 60);
-    cam.setDeadzone(80, 90);
-    this.lookAhead = 0;
-    // Post effects exist only in WebGL. On the canvas fallback the game still runs, just without them.
-    this.fxColor = cam.postFX ? cam.postFX.addColorMatrix() : null;
-    this.fxVignette = cam.postFX ? cam.postFX.addVignette(0.5, 0.5, 0.9, 0.32) : null;
+    const C = TUNING.camera;
+    this.lookAhead = (spawn.facing ?? 1) * C.lookAhead * 0.35;
+    this.camFocusY = spawn.y;
+    this.camTarget = { x: spawn.x + this.lookAhead, y: spawn.y - C.offsetY };
+    cam.startFollow(this.camTarget, false, C.lerpX, C.lerpY);
+    // Colour grade (WebGL only; on the canvas fallback the game runs without it).
+    this.grade = null;
+    if (hasShaders(this)) {
+      cam.setPostPipeline('Grade');
+      const gp = cam.getPostPipeline('Grade');
+      this.grade = Array.isArray(gp) ? gp[0] : gp;
+      Object.assign(this.grade.params, level.grade ?? {});
+    }
+    this.shock = 0;
 
     this.controls = new Controls(this);
     this.foresight = new Foresight(this);
-    this.coneGfx = this.add.graphics().setDepth(34);
+    this.coneGfx = this.add.graphics().setDepth(30);
     this.debugGfx = this.add.graphics().setDepth(60);
     this.debugText = this.add.text(0, 0, '', { fontFamily: 'monospace', fontSize: '12px', color: '#9fffb0' }).setDepth(61).setScrollFactor(0);
     this.colliderDebug(DEV.colliders);
@@ -161,34 +174,91 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------------
   // Building helpers
   // ------------------------------------------------------------------
+  // Typical camera scroll at floor level, used to place parallax layers so their
+  // bottoms meet the horizon behind the street.
+  baseScrollY() {
+    const g = this.level.horizonY ?? this.level.height - 300;
+    return g - TUNING.camera.offsetY - TUNING.view.height / 2;
+  }
+
+  // A horizontal layer that scrolls slower than the world (fx < 1) or faster (fx > 1).
+  // bottom: where its bottom edge sits on screen at the typical scroll.
+  layer(key, fx, fy, bottom, h, depth, o = {}) {
+    const { width } = TUNING.view;
+    const S0 = this.baseScrollY();
+    const w = Math.ceil(Math.max(0, this.level.width - width) * fx + width + 64);
+    const ts = this.add.tileSprite(-32, bottom - h + S0 * fy, w, h, key).setOrigin(0).setScrollFactor(fx, fy).setDepth(depth);
+    if (o.tint !== undefined) ts.setTint(o.tint);
+    if (o.alpha !== undefined) ts.setAlpha(o.alpha);
+    if (o.blend) ts.setBlendMode(o.blend);
+    if (o.drift) this.drifters.push({ ts, speed: o.drift });
+    return ts;
+  }
+
   buildBackground(level) {
     const { width, height } = TUNING.view;
     const sky = level.sky ?? 'night';
+    const fogTint = 0xc79a74;
     if (sky === 'hall') {
       this.add.image(0, 0, 'sky_hall').setOrigin(0).setScrollFactor(0).setDisplaySize(width, height).setDepth(0);
-      this.decor.layers = [{ ts: this.add.tileSprite(0, 0, width, height, 'para_hall').setOrigin(0).setScrollFactor(0).setDepth(2), f: 0.45, fy: 0.3 }];
-    } else {
-      this.decor.sky = this.add.image(0, 0, 'sky_night').setOrigin(0).setScrollFactor(0).setDisplaySize(width, height).setDepth(0);
-      this.decor.dawnSky = this.add.image(0, 0, 'sky_dawn').setOrigin(0).setScrollFactor(0).setDisplaySize(width, height).setDepth(0.1).setAlpha(0);
-      this.decor.stars = this.add.tileSprite(0, 0, width, 320, 'stars').setOrigin(0).setScrollFactor(0).setDepth(0.5);
-      this.decor.moon = this.add.image(960, 120, 'moon').setScrollFactor(0).setDepth(1).setScale(1.2);
-      this.decor.moonHalo = this.add.image(960, 120, 'softglow').setScrollFactor(0).setDepth(31.4).setBlendMode('ADD').setTint(0xffd2a0).setScale(3).setAlpha(0.12);
-      this.decor.layers = [
-        { ts: this.add.tileSprite(0, height - 420, width, 300, 'para_hills').setOrigin(0).setScrollFactor(0).setDepth(2), f: 0.08, fy: 0.05 },
-        { ts: this.add.tileSprite(0, height - 360, width, 300, 'para_village').setOrigin(0).setScrollFactor(0).setDepth(3), f: 0.22, fy: 0.12 },
-        { ts: this.add.tileSprite(0, height - 300, width, 300, 'para_trees').setOrigin(0).setScrollFactor(0).setDepth(4), f: 0.42, fy: 0.25 },
-      ];
+      this.layer('hall_back', 0.45, 0.25, 720, 720, 2);
+      // the Hall's back wall, in the world, between the vault and the floor
+      this.add.tileSprite(0, level.wallTop ?? 150, level.width, (level.wallBottom ?? 700) - (level.wallTop ?? 150), 'hall_wall').setOrigin(0).setDepth(10);
+      this.decor.layers = [];
+      return;
     }
+    this.decor.sky = this.add.image(0, 0, 'sky_night').setOrigin(0).setScrollFactor(0).setDisplaySize(width, height).setDepth(0);
+    this.decor.dawnSky = this.add.image(0, 0, 'sky_dawn').setOrigin(0).setScrollFactor(0).setDisplaySize(width, height).setDepth(0.1).setAlpha(0);
+    this.decor.stars = this.layer('stars', 0.02, 0.0, 380, 380, 0.5);
+    const S0 = this.baseScrollY();
+    this.decor.moonHalo = this.add.image(1010, 150 + S0 * 0.02, 'softglow').setScrollFactor(0.02).setDepth(0.7).setBlendMode('ADD').setTint(0xffd8b0).setScale(5.5).setAlpha(0.22);
+    this.decor.moon = this.add.image(1010, 150 + S0 * 0.02, 'moon').setScrollFactor(0.02).setDepth(0.8).setScale(1.05);
+    this.decor.sun = this.add.image(1100, 520 + S0 * 0.02, 'flare').setScrollFactor(0.02).setDepth(0.75).setBlendMode('ADD').setTint(0xffe2a0).setScale(4).setAlpha(0);
+    this.decor.layers = [
+      this.layer('clouds_a', 0.05, 0.02, 330, 300, 1, { drift: 6, alpha: 0.85 }),
+      this.layer('hills_far', 0.1, 0.05, 520, 330, 2),
+      this.layer('fog_band', 0.12, 0.06, 560, 220, 2.5, { tint: fogTint, alpha: 0.28, drift: 4 }),
+      this.layer('forest_far', 0.18, 0.08, 560, 320, 3),
+      this.layer('clouds_b', 0.09, 0.03, 260, 240, 3.2, { drift: 11, alpha: 0.5 }),
+      this.layer('skyline_far', 0.27, 0.12, 575, 360, 4),
+      this.layer('fog_band', 0.3, 0.14, 600, 220, 4.5, { tint: fogTint, alpha: 0.3, drift: 7 }),
+      this.layer('skyline_near', 0.38, 0.18, 590, 420, 5),
+      this.layer('trees_mid', 0.55, 0.3, 600, 480, 6),
+      this.layer('fog_band', 0.6, 0.32, 610, 220, 6.5, { tint: fogTint, alpha: 0.32, drift: 10 }),
+    ];
   }
 
-  buildFog(level) {
-    if (!level.fog) return;
-    const { width, height } = TUNING.view;
-    this.decor.fog = [
-      this.add.tileSprite(0, 0, width, height, 'fog').setOrigin(0).setScrollFactor(0).setDepth(32).setTint(0xc79a74),
-      this.add.tileSprite(0, height * 0.45, width, height * 0.55, 'fog2').setOrigin(0).setScrollFactor(0).setDepth(32).setTint(0xd8a882),
-    ];
+  buildAtmosphere(level) {
+    const { width } = TUNING.view;
     this.fogMul = 1;
+    if (level.sky === 'hall') {
+      // dark columns passing close to the camera give the Hall depth
+      for (let x = 700; x < level.width + 600; x += 1500) {
+        this.add.image(x, level.height + 20, `pillar_fg`).setOrigin(0.5, 1).setScrollFactor(1.35, 1).setDepth(55).setTint(0x020104);
+      }
+      this.decor.dust = this.add.particles(0, 0, 'spark', {
+        x: { min: 0, max: width }, y: { min: 100, max: 700 }, lifespan: 8000, speedX: { min: -4, max: 4 }, speedY: { min: -6, max: 3 },
+        scale: { min: 0.15, max: 0.4 }, alpha: { onEmit: () => 0, onUpdate: (p, k, t) => Math.sin(t * Math.PI) * 0.45 },
+        tint: 0xcfd8ff, blendMode: 'ADD', frequency: 140,
+      }).setScrollFactor(0).setDepth(26);
+      return;
+    }
+    if (!level.fog) return;
+    // fog drifting in front of the action, strongest where the level's fog is thickest
+    this.decor.nearFog = [
+      this.add.tileSprite(0, 330, width, 300, 'fog_band').setOrigin(0).setScrollFactor(0).setDepth(52).setTint(0xc79a74).setAlpha(0.12),
+      this.add.tileSprite(0, 470, width, 260, 'fog_band').setOrigin(0).setScrollFactor(0).setDepth(52).setTint(0xb48a6c).setAlpha(0.1),
+    ];
+    // foreground grass, closest to the camera
+    const G = level.horizonY ?? level.height - 300;
+    const w = Math.ceil(level.width * 1.25 + width + 64);
+    this.decor.fgGrass = this.add.tileSprite(-32, G + 118 - 130, w, 130, 'fg_grass').setOrigin(0).setScrollFactor(1.25, 1).setDepth(56);
+    // ash and motes floating in the night air
+    this.decor.motes = this.add.particles(0, 0, 'spark', {
+      x: { min: 0, max: width }, y: { min: 0, max: 720 }, lifespan: 9000, speedX: { min: 4, max: 14 }, speedY: { min: -4, max: 6 },
+      scale: { min: 0.15, max: 0.45 }, alpha: { onEmit: () => 0, onUpdate: (p, k, t) => Math.sin(t * Math.PI) * 0.4 },
+      tint: [0xffd2a8, 0xd8e0ff], blendMode: 'ADD', frequency: 180,
+    }).setScrollFactor(0).setDepth(53);
   }
 
   findSpawn(id) {
@@ -235,6 +305,7 @@ export class GameScene extends Phaser.Scene {
     return {
       id: 'player', kind: 'player', x: p.x, y: p.y, feetY: p.feetY, light: p.lightInfo, merged: p.merged,
       moving: p.moving, hidden: false, alive: !p.dead && !DEV.invisible && !p.noclip,
+      inCover: p.inCover, points: p.lightSamplePoints(),
     };
   }
 
@@ -269,6 +340,7 @@ export class GameScene extends Phaser.Scene {
 
     if (this.modal) {
       this.lighting.render(cam);
+      this.updateFx(dt);
       AUDIO.update(dt, { tension: 0, burn: 0, foresight: false });
       return;
     }
@@ -286,6 +358,7 @@ export class GameScene extends Phaser.Scene {
         bus.emit('foresight:time', tp, this.foresight.horizon);
         this.drawStillpointHints();
         this.lighting.render(cam);
+        this.updateFx(dt);
         AUDIO.update(dt, { foresight: true, tension: 0, burn: 0, hum: 0 });
         return;
       }
@@ -314,7 +387,10 @@ export class GameScene extends Phaser.Scene {
     const info = this.sampleLight();
     const burn = p.updateLight(dt, info, GAME.data.fragments, DEV.god || this.dying || this.ended || p.noclip);
     if (p.substance <= 0 && !this.dying) this.killPlayer(info.fire ? 'fire' : 'burned');
-    for (const sv of this.survivors) sv.light = this.lighting.getLightAt(sv.x, sv.sampleY());
+    for (const sv of this.survivors) {
+      sv.light = this.lighting.getLightAt(sv.x, sv.sampleY());
+      sv.inCover = this.lighting.coverAt(sv.x, sv.sampleY());
+    }
     p.inCover = this.lighting.coverAt(p.x, p.y);
 
     // ---- perception ----
@@ -329,6 +405,7 @@ export class GameScene extends Phaser.Scene {
     this.updateDecor(dt);
     this.drawCones();
     this.lighting.render(cam);
+    this.updateFx(dt);
     this.drawDebug();
 
     // ---- audio ----
@@ -353,28 +430,37 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------------
   updateCamera(dt) {
     const p = this.player;
-    const cam = this.cameras.main;
-    const target = p.facing * 140 * Math.min(1, Math.abs(p.body.velocity.x) / 120 + 0.35);
-    this.lookAhead += (target - this.lookAhead) * Math.min(1, dt * 1.6);
-    cam.setFollowOffset(-this.lookAhead, 60);
+    const C = TUNING.camera;
+    const want = p.facing * C.lookAhead * Math.min(1, Math.abs(p.body.velocity.x) / 120 + 0.35);
+    this.lookAhead += (want - this.lookAhead) * Math.min(1, dt * C.lookAheadRate);
+    if (!C.groundFollow || p.onFloor || p.merged || p.noclip) this.camFocusY = p.feetY;
+    else if (p.feetY > this.camFocusY + 30) this.camFocusY = p.feetY - 30;      // falling past the old floor
+    else if (p.feetY < this.camFocusY - 200) this.camFocusY = p.feetY + 200;    // climbing high
+    this.camTarget.x = p.x + this.lookAhead;
+    this.camTarget.y = this.camFocusY - C.offsetY;
   }
 
   updateDecor(dt) {
+    for (const d of this.drifters) d.ts.tilePositionX += d.speed * dt;
     const cam = this.cameras.main;
-    for (const l of this.decor.layers ?? []) {
-      l.ts.tilePositionX = cam.scrollX * l.f;
-      l.ts.y = (l.baseY ??= l.ts.y) - (cam.scrollY - (this.level.height - TUNING.view.height)) * l.fy;
-    }
-    if (this.decor.stars) this.decor.stars.tilePositionX = cam.scrollX * 0.02;
-    if (this.decor.fog) {
+    if (this.decor.nearFog) {
       const fogHere = this.fogAt(cam.worldView.centerX);
-      const [f1, f2] = this.decor.fog;
-      f1.tilePositionX = cam.scrollX * 0.6 + this.simTime * 12;
-      f1.tilePositionY = cam.scrollY * 0.3;
-      f2.tilePositionX = cam.scrollX * 0.9 + this.simTime * 22;
-      f1.setAlpha(0.08 + fogHere * 0.22);
-      f2.setAlpha(0.08 + fogHere * 0.3);
+      const [f1, f2] = this.decor.nearFog;
+      f1.tilePositionX = cam.scrollX * 1.1 + this.simTime * 14;
+      f2.tilePositionX = cam.scrollX * 1.25 + this.simTime * 24;
+      f1.setAlpha(0.04 + fogHere * 0.14);
+      f2.setAlpha(0.03 + fogHere * 0.12);
     }
+  }
+
+  // Per-frame shader values: Foresight greys the world, a burn tick shudders it.
+  updateFx(dt) {
+    this.shock = Math.max(0, this.shock - dt * 3);
+    if (!this.grade) return;
+    const g = this.grade.params;
+    const targetDesat = this.foresight.active ? TUNING.foresight.desaturate : 0;
+    g.desat += (targetDesat - g.desat) * Math.min(1, dt * 10);
+    g.shock = this.shock;
   }
 
   updateSwingers() {
@@ -396,24 +482,32 @@ export class GameScene extends Phaser.Scene {
     const p = this.player;
     const S = TUNING.stealth;
     for (const w of this.watchers) {
-      if (w.mode === 'down') continue;
-      const near = Math.abs(w.x - p.x) < S.coneShowDistance && Math.abs(w.groundY - p.feetY) < 260;
+      if (w.mode === 'down' || w.mode === 'dormant') continue;
+      const near = Math.abs(w.x - p.x) < S.coneShowDistance && Math.abs(w.groundY - p.feetY) < 280;
       if (!near && !DEV.aiDebug) continue;
-      const half = ((w.mode === 'alert' || w.mode === 'search' ? S.alertCone : S.cone) * Math.PI) / 180;
+      const up = ((w.mode === 'alert' || w.mode === 'search' ? S.alertCone : S.cone) * Math.PI) / 180;
+      const down = up + 0.4;
+      // the same shape the watcher sees with: further down than up
+      const a0 = w.s.facing > 0 ? -up : Math.PI - down;
+      const a1 = w.s.facing > 0 ? down : Math.PI + up;
+      const center = (a0 + a1) / 2, half = (a1 - a0) / 2;
       const fog = 1 - S.fogVision * this.fogAt(w.x);
-      const dir = w.s.facing > 0 ? 0 : Math.PI;
       const col = w.mode === 'alert' ? 0xff4a3a : w.mode === 'suspicious' || w.mode === 'search' ? 0xffb347 : 0xfff0dc;
       const ex = w.eyeX(), ey = w.eyeY();
-      const outer = this.lighting.rayFan(ex, ey, dir, half, S.range.light * fog, 22);
-      const inner = this.lighting.rayFan(ex, ey, dir, half, S.range.shade * fog, 16);
+      const outer = this.lighting.rayFan(ex, ey, center, half, S.range.light * fog, 24);
+      const inner = this.lighting.rayFan(ex, ey, center, half, S.range.shade * fog, 18);
       const fade = near ? 1 - Math.max(0, Math.abs(w.x - p.x) - S.coneShowDistance * 0.6) / (S.coneShowDistance * 0.4) : 0.6;
-      g.fillStyle(col, 0.05 * fade);
+      g.fillStyle(col, 0.045 * fade);
       this.fillPoly(g, outer);
-      g.fillStyle(col, 0.09 * fade);
+      g.fillStyle(col, 0.08 * fade);
       this.fillPoly(g, inner);
-      g.lineStyle(1, col, 0.22 * fade);
+      g.lineStyle(1, col, 0.2 * fade);
       g.lineBetween(outer[0], outer[1], outer[2], outer[3]);
       g.lineBetween(outer[0], outer[1], outer[outer.length - 2], outer[outer.length - 1]);
+      // the near-sense ring at his feet
+      const N = S.near;
+      g.fillStyle(col, 0.06 * fade);
+      g.fillEllipse(w.x + (w.s.facing * (N.front - N.back)) / 2, w.groundY - 2, N.front + N.back, 14);
     }
   }
 
@@ -456,9 +550,10 @@ export class GameScene extends Phaser.Scene {
     d.stats.foresights += 1;
     const seconds = d.hourShards[this.worldId] ? TUNING.foresight.glimpseSeconds : TUNING.foresight.sipSeconds;
     this.physics.world.pause();
+    for (const w of this.watchers) w.sprite.anims.pause();
+    for (const sv of this.survivors) sv.sprite.anims.pause();
+    this.player.sprite.anims.pause();
     this.foresight.begin(this.watchers, seconds, this.player.x);
-    this.fxColor?.grayscale(TUNING.foresight.desaturate);
-    if (this.fxVignette) this.fxVignette.strength = 0.6;
     AUDIO.play('foresightIn');
     bus.emit('foresight:start', seconds);
     this.level.onForesight?.(this);
@@ -467,8 +562,9 @@ export class GameScene extends Phaser.Scene {
   endForesight() {
     this.foresight.end();
     this.physics.world.resume();
-    this.fxColor?.reset();
-    if (this.fxVignette) this.fxVignette.strength = 0.32;
+    for (const w of this.watchers) w.sprite.anims.resume();
+    for (const sv of this.survivors) sv.sprite.anims.resume();
+    this.player.sprite.anims.resume();
     AUDIO.play('foresightOut');
     bus.emit('foresight:end');
   }
@@ -824,6 +920,14 @@ export class GameScene extends Phaser.Scene {
 
   setFlag(name, value = true) {
     GAME.setFlag(name, value);
+  }
+
+  // A damage tick in the light: red pulse, a shudder, a sizzle.
+  onBurnTick(damage, fire) {
+    this.shock = 1;
+    if (this.settings.shake) this.cameras.main.shake(110, 0.0035);
+    AUDIO.play('burnTick', { vol: fire ? 1 : 0.85 });
+    bus.emit('burnTick', damage, this.player.substance / TUNING.player.maxSubstance);
   }
 
   // Effects the player calls

@@ -15,32 +15,78 @@ export class TitleScene extends Phaser.Scene {
   create() {
     const { width: W, height: H } = TUNING.view;
     this.cameras.main.setBackgroundColor('#030208');
-    this.add.image(W / 2, H / 2 + 40, 'hourglass').setAlpha(0.12).setScale(1.4);
-    this.add.image(W / 2, H * 0.62, 'softglow').setBlendMode('ADD').setTint(0xff7a3a).setScale(7, 3).setAlpha(0.08);
+    this.cameras.main.fadeIn(1200, 0, 0, 0);
+
+    // Key art: the man and the shadow he leaves behind (a painted cutscene panel),
+    // drifting slowly. Falls back to the hourglass if the image is missing.
+    if (this.textures.exists('cut_split')) {
+      const art = this.add.image(W / 2, H / 2, 'cut_split');
+      const cover = Math.max(W / art.width, H / art.height) * 1.08;
+      art.setScale(cover).setAlpha(0.9);
+      this.tweens.add({ targets: art, scale: cover * 1.05, x: W / 2 - 24, duration: 22000, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    } else {
+      this.add.image(W / 2, H / 2 + 40, 'hourglass').setAlpha(0.12).setScale(1.4);
+    }
+    // darken the sky for the logo and the floor for the menu
+    const shade = this.add.graphics();
+    shade.fillGradientStyle(0x030208, 0x030208, 0x030208, 0x030208, 0.92, 0.92, 0, 0);
+    shade.fillRect(0, 0, W, 330);
+    shade.fillGradientStyle(0x030208, 0x030208, 0x030208, 0x030208, 0, 0, 0.95, 0.95);
+    shade.fillRect(0, H - 300, W, 300);
+    shade.fillGradientStyle(0x030208, 0x030208, 0x030208, 0x030208, 0.7, 0, 0.7, 0);
+    shade.fillRect(0, 0, 220, H);
+    shade.fillGradientStyle(0x030208, 0x030208, 0x030208, 0x030208, 0, 0.7, 0, 0.7);
+    shade.fillRect(W - 220, 0, 220, H);
+
+    // embers rising from the fire he died in, and violet motes shed by the shadow
     this.add.particles(0, H + 10, 'spark', {
-      x: { min: 0, max: W }, lifespan: 7000, speedY: { min: -60, max: -20 }, speedX: { min: -15, max: 15 },
-      scale: { start: 0.9, end: 0 }, alpha: { start: 0.9, end: 0 }, tint: [0xffb060, 0xff7a3a, 0xe8c372],
-      blendMode: 'ADD', frequency: 90,
+      x: { min: 0, max: W }, lifespan: 7000, speedY: { min: -70, max: -20 }, speedX: { min: -15, max: 25 },
+      scale: { start: 1, end: 0 }, alpha: { start: 0.9, end: 0 }, tint: [0xffb060, 0xff7a3a, 0xe8c372],
+      blendMode: 'ADD', frequency: 70,
+    });
+    this.add.particles(W * 0.62, H * 0.5, 'spark', {
+      x: { min: -220, max: 220 }, y: { min: -260, max: 260 }, lifespan: 4000, speedY: { min: -30, max: -8 }, speedX: { min: -10, max: 10 },
+      scale: { start: 0.8, end: 0 }, alpha: { start: 0.8, end: 0 }, tint: [0xb48cff, 0x7a4cff], blendMode: 'ADD', frequency: 110,
     });
     this.add.particles(0, H, 'smoke', {
       x: { min: 0, max: W }, lifespan: 9000, speedY: { min: -25, max: -8 }, scale: { start: 1.5, end: 4 },
-      alpha: { start: 0.25, end: 0 }, tint: 0x120c1c, frequency: 160,
+      alpha: { start: 0.3, end: 0 }, tint: 0x120c1c, frequency: 160,
     });
-    // a small shadow figure standing at the edge of the light
-    this.add.image(W / 2, H - 70, 'shade_rim').setOrigin(0.5, 0.92).setScale(1.33).setBlendMode('ADD').setTint(0x9a6bff).setAlpha(0.6);
-    this.add.image(W / 2, H - 70, 'shade').setOrigin(0.5, 1).setScale(1.3);
 
-    this.add.text(W / 2, 170, TITLE.name, { fontFamily: 'Cinzel, Georgia, serif', fontSize: '84px', color: '#efe3cc', letterSpacing: 10 }).setOrigin(0.5);
-    this.add.text(W / 2, 250, TITLE.tagline, { fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '28px', color: '#e8c372', fontStyle: 'italic' }).setOrigin(0.5);
-    this.add.text(W / 2, 290, TITLE.slice, { fontFamily: 'Inter, Arial, sans-serif', fontSize: '14px', color: '#6f6a82', letterSpacing: 2 }).setOrigin(0.5);
+    // the logo: glowing letters, a gold rule with an hourglass, the three themes
+    const logo = this.add.text(W / 2, 128, TITLE.name, { fontFamily: 'Cinzel, Georgia, serif', fontSize: '92px', fontStyle: 'bold', color: '#f1e6d2', letterSpacing: 14 })
+      .setOrigin(0.5).setShadow(0, 0, '#8a5cff', 26, false, true).setAlpha(0);
+    this.tweens.add({ targets: logo, alpha: 1, y: 120, duration: 1800, ease: 'Sine.easeOut' });
+    const glowPulse = this.add.image(W / 2, 120, 'softglow').setBlendMode('ADD').setTint(0x7a4cff).setScale(9, 1.6).setAlpha(0.18);
+    this.tweens.add({ targets: glowPulse, alpha: 0.3, duration: 2600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    const rule = this.add.graphics();
+    rule.lineStyle(1.5, 0xe8c372, 0.75);
+    rule.lineBetween(W / 2 - 260, 196, W / 2 - 24, 196);
+    rule.lineBetween(W / 2 + 24, 196, W / 2 + 260, 196);
+    rule.fillStyle(0xe8c372, 0.9);
+    rule.fillCircle(W / 2 - 262, 196, 2.5); rule.fillCircle(W / 2 + 262, 196, 2.5);
+    this.add.image(W / 2, 196, 'icon_sand').setScale(0.9);
+    this.add.text(W / 2, 236, TITLE.tagline, { fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '30px', color: '#e8c372', fontStyle: 'italic' })
+      .setOrigin(0.5).setShadow(0, 0, '#000000', 10, false, true);
+    this.add.text(W / 2, H - 26, TITLE.slice.toUpperCase(), { fontFamily: 'Inter, Arial, sans-serif', fontSize: '11px', color: '#7d7792', letterSpacing: 3 }).setOrigin(0.5);
 
-    this.press = this.add.text(W / 2, 420, 'Press any key', { fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '28px', color: '#cfc6e0' }).setOrigin(0.5);
+    this.press = this.add.text(W / 2, 560, 'Press any key', { fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '30px', color: '#e6dff2' })
+      .setOrigin(0.5).setShadow(0, 0, '#000000', 8, false, true);
     this.tweens.add({ targets: this.press, alpha: 0.3, duration: 1100, yoyo: true, repeat: -1 });
 
     this.items = [];
     this.sel = 0;
     this.stage = 'press';
-    this.info = this.add.text(W / 2, 360, '', { fontFamily: 'Inter, Arial, sans-serif', fontSize: '17px', color: '#c8c2d8', align: 'left', lineSpacing: 6 }).setOrigin(0.5, 0).setVisible(false);
+    // controls page: actions on the left, keys on the right, inside a dark panel
+    const col = { fontFamily: 'Inter, Arial, sans-serif', fontSize: '17px', lineSpacing: 7 };
+    this.info = this.add.container(0, 0).setVisible(false);
+    this.info.add([
+      this.add.rectangle(W / 2, 478, 760, 400, 0x05040a, 0.9).setStrokeStyle(1, 0xe8c372, 0.45),
+      this.add.text(W / 2 - 16, 300, CONTROLS.map(([a]) => a).join('\n'), { ...col, color: '#a9a3bd', align: 'right' }).setOrigin(1, 0),
+      this.add.text(W / 2 + 16, 300, CONTROLS.map(([, k]) => k).join('\n'), { ...col, color: '#efe3cc' }).setOrigin(0, 0),
+      this.add.text(W / 2, 600, GAMEPAD_CONTROLS, { ...col, fontSize: '14px', color: '#8a849e', align: 'center', wordWrap: { width: 680 } }).setOrigin(0.5, 0),
+      this.add.text(W / 2, 652, 'Press Esc to go back', { fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '22px', color: '#e8c372', fontStyle: 'italic' }).setOrigin(0.5, 0),
+    ]);
     if (TUNING.dev.enabled) this.add.text(W - 16, H - 14, 'Dev menu: ` (backtick)', { fontFamily: 'Inter, Arial', fontSize: '12px', color: '#4f4a62' }).setOrigin(1);
 
     this.keys = this.input.keyboard.addKeys('UP,DOWN,W,S,E,ENTER,SPACE,ESC');
@@ -66,9 +112,9 @@ export class TitleScene extends Phaser.Scene {
     this.entries.push(['New game', () => this.newGame()]);
     this.entries.push(['Controls', () => this.showControls()]);
     this.items.forEach((t) => t.destroy());
-    this.items = this.entries.map(([label], i) => this.add.text(W / 2, 390 + i * 50, label, {
+    this.items = this.entries.map(([label], i) => this.add.text(W / 2, 520 + i * 48 - (this.entries.length - 2) * 24, label, {
       fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '32px', color: '#a9a3bd',
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true })
+    }).setOrigin(0.5).setShadow(0, 0, '#000000', 8, false, true).setInteractive({ useHandCursor: true })
       .on('pointerover', () => { this.sel = i; this.render(); })
       .on('pointerdown', () => { if (this.stage === 'menu') this.entries[i][1](); }));
     this.render();
@@ -103,7 +149,7 @@ export class TitleScene extends Phaser.Scene {
     AUDIO.play('ui');
     this.stage = 'controls';
     this.items.forEach((t) => t.setVisible(false));
-    this.info.setText(CONTROLS.map(([a, b]) => `${a.padEnd(26, ' ')}${b}`).join('\n') + `\n\n${GAMEPAD_CONTROLS}\n\nPress Esc to go back.`).setVisible(true);
+    this.info.setVisible(true);
   }
 
   update() {

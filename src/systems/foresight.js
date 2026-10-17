@@ -12,6 +12,7 @@
 
 import { stepWatcherState } from '../entities/Watcher.js';
 import { TUNING } from '../tuning.js';
+import { feetOrigin } from '../art/characters.js';
 
 const SIM_DT = 1 / 30;
 const GHOST_TINT = 0xcfe2ff;
@@ -40,9 +41,12 @@ export class Foresight {
         stepWatcherState(s, w.cfg, SIM_DT);
         frames.push({ x: s.x, facing: s.facing });
       }
-      const ghost = this.scene.add.image(w.x, w.groundY, w.type).setOrigin(0.5, 1).setDepth(46)
-        .setTintFill(GHOST_TINT).setAlpha(0.42);
-      const end = this.scene.add.image(frames[frames.length - 1].x, w.groundY, w.type).setOrigin(0.5, 1).setDepth(46)
+      const [ox, oy] = feetOrigin(w.type);
+      const frame = Number(w.sprite.frame.name) || 0;
+      const ghost = this.scene.add.sprite(w.x, w.groundY, w.type, frame).setOrigin(ox, oy).setDepth(46)
+        .setTintFill(GHOST_TINT).setAlpha(0.45);
+      if (this.scene.anims.exists(`${w.type}_walk`)) ghost.play(`${w.type}_walk`);
+      const end = this.scene.add.sprite(frames[frames.length - 1].x, w.groundY, w.type, frame).setOrigin(ox, oy).setDepth(46)
         .setTintFill(GHOST_TINT).setAlpha(0.16).setFlipX(frames[frames.length - 1].facing < 0);
       this.tracks.push({ w, frames, ghost, end });
     }

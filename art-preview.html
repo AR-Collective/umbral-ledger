@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Umbral Ledger art preview</title>
+<style>
+  body { margin: 0; background: #1b1a24; color: #ddd; font: 13px/1.4 Inter, Arial, sans-serif; padding: 16px; }
+  h2 { font-weight: 600; margin: 18px 0 6px; color: #e8c372; }
+  canvas { display: block; max-width: 100%; background: repeating-conic-gradient(#2a2836 0% 25%, #23212e 0% 50%) 0 / 16px 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+</style>
+</head>
+<body>
+<p>Dev tool: every painted character sheet and scenery texture. Run <code>npm run dev</code> and open /art-preview.html.</p>
+<div id="out"></div>
+<script type="module" src="/src/dev/artPreview.js"></script>
+</body>
+</html>

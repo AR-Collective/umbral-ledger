@@ -100,9 +100,8 @@ export class DevPanel {
     this.slider('Time scale', 0.2, 2, 0.05, () => this.game.registry.get('timeScale') ?? 1, (v) => this.game.registry.set('timeScale', v));
     this.slider('Light resistance lvl', 0, 7, 1, () => GAME.data.fragments, (v) => { GAME.data.fragments = v; });
     this.slider('Grace in light (s)', 0, 2, 0.05, () => resistanceFor(GAME.data.fragments).grace, (v) => { resistanceFor(GAME.data.fragments).grace = v; });
-    this.slider('Max burn per sec', 5, 150, 1, () => resistanceFor(GAME.data.fragments).dpsMax, (v) => { resistanceFor(GAME.data.fragments).dpsMax = v; });
-    this.slider('Dim burn per sec', 0, 30, 1, () => resistanceFor(GAME.data.fragments).dimDps, (v) => { resistanceFor(GAME.data.fragments).dimDps = v; });
-    this.slider('Darkness', 0.5, 1, 0.01, () => TUNING.light.darkMax, (v) => { TUNING.light.darkMax = v; });
+    this.slider('Damage per tick', 2, 100, 1, () => resistanceFor(GAME.data.fragments).tick, (v) => { resistanceFor(GAME.data.fragments).tick = v; });
+    this.slider('Seconds per tick', 0.3, 2, 0.05, () => resistanceFor(GAME.data.fragments).interval, (v) => { resistanceFor(GAME.data.fragments).interval = v; });
     this.slider('Detection speed x', 0.3, 3, 0.05, () => this.base.stealth.fillTime.light / TUNING.stealth.fillTime.light, (v) => {
       for (const k of ['light', 'dim', 'shade']) TUNING.stealth.fillTime[k] = this.base.stealth.fillTime[k] / v;
     });
