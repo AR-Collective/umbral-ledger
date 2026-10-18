@@ -5,7 +5,7 @@
 
 import Phaser from 'phaser';
 
-const KEYS = 'W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,J,K,E,F,Q,ESC,TAB,M,H,ENTER,R,X,Z';
+const KEYS = 'W,A,S,D,UP,DOWN,LEFT,RIGHT,SPACE,J,K,L,U,I,E,F,Q,ESC,TAB,M,H,ENTER,R,X,Z';
 
 export class Controls {
   constructor(scene) {
@@ -36,6 +36,9 @@ export class Controls {
       jump: k.SPACE.isDown || k.W.isDown || k.UP.isDown || (p && p.A),
       strike: k.J.isDown || (p && p.X),
       dash: k.K.isDown || (p && p.B),
+      ember: k.L.isDown || (p && p.R2 > 0.4),
+      echo: k.U.isDown || (p && p.L1),
+      eclipse: k.I.isDown || (p && p.buttons[10] && p.buttons[10].pressed),
       interact: k.E.isDown || k.ENTER.isDown || (p && p.Y),
       foresight: k.F.isDown || (p && p.L2 > 0.4),
       command: k.Q.isDown || (p && p.R1),

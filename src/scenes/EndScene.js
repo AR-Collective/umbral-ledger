@@ -24,11 +24,13 @@ export class EndScene extends Phaser.Scene {
     const type = this.data_.type;
     this.cameras.main.setBackgroundColor('#040309').fadeIn(900, 0, 0, 0);
     AUDIO.setAmbience('title');
-    const title = type === 'fractured' ? `${this.data_.name} is Fractured` : 'End of the vertical slice';
+    const title = type === 'fractured' ? `${this.data_.name} is Fractured` : type === 'final' ? 'The Last Noon is saved' : 'End of the vertical slice';
     this.add.text(W / 2, 90, title, { fontFamily: 'Cinzel, Georgia', fontSize: '40px', color: type === 'fractured' ? '#ff9a7a' : '#e8c372' }).setOrigin(0.5);
     const sub = type === 'fractured'
       ? 'You ran out of Threads. A Fractured world is remembered in the Ledger. You can try it again.'
-      : 'Thank you for playing the Prologue and Hollowmere.';
+      : type === 'final'
+        ? 'Seven of seven. The shadow is whole, and the Hourglass Hall is waiting. Thank you for playing.'
+        : 'Thank you for playing the Prologue and Hollowmere.';
     this.add.text(W / 2, 140, sub, { fontFamily: '"Cormorant Garamond", Georgia', fontStyle: 'italic', fontSize: '24px', color: '#cfc6e0', align: 'center', wordWrap: { width: 900 } }).setOrigin(0.5);
 
     const ledger = d.ledger.map((k) => LEDGER_TEXT[k] ?? k).join('\n');
@@ -37,12 +39,14 @@ export class EndScene extends Phaser.Scene {
     }).setOrigin(0.5, 0);
     const s = d.stats;
     this.add.text(W / 2, H - 170,
-      `Threads left: ${d.threads}     Deaths: ${s.deaths}     Times seen: ${s.seen}     Takedowns: ${s.takedowns}     Foresights: ${s.foresights}     Combos: ${d.codex.length}/2`,
+      `Threads left: ${d.threads}     Deaths: ${s.deaths}     Times seen: ${s.seen}     Takedowns: ${s.takedowns}     Foresights: ${s.foresights}     Combos: ${d.codex.length}/2     Fragments: ${d.fragments}/7`,
       { fontFamily: 'Inter, Arial', fontSize: '15px', color: '#8f8aa3' }).setOrigin(0.5);
 
     this.entries = type === 'fractured'
-      ? [['Try Hollowmere again', () => this.retry()], ['Title screen', () => this.scene.start('Title')]]
-      : [['Title screen', () => this.scene.start('Title')]];
+      ? [[`Try ${this.data_.name} again`, () => this.retry()], ['Title screen', () => this.scene.start('Title')]]
+      : type === 'complete'
+        ? [['Go on to the final world: The Last Noon', () => this.toFinalWorld()], ['Title screen', () => this.scene.start('Title')]]
+        : [['Title screen', () => this.scene.start('Title')]];
     this.sel = 0;
     this.items = this.entries.map(([label], i) => this.add.text(W / 2, H - 110 + i * 44, label, { fontFamily: '"Cormorant Garamond", Georgia', fontSize: '30px', color: '#a9a3bd' }).setOrigin(0.5)
       .setInteractive({ useHandCursor: true }).on('pointerdown', () => this.entries[i][1]()));
@@ -52,6 +56,17 @@ export class EndScene extends Phaser.Scene {
 
   render() {
     this.items.forEach((t, i) => t.setColor(i === this.sel ? '#e8c372' : '#a9a3bd'));
+  }
+
+  // Worlds 2 to 6 are not in this build: the run skips to the last one, arriving
+  // as it would after them (six fragments home). The Ledger and stats carry over.
+  toFinalWorld() {
+    AUDIO.play('uiSelect');
+    const { ledger, stats, seenLines } = GAME.data;
+    GAME.setupFinalWorld();
+    Object.assign(GAME.data, { ledger: [...ledger], stats, seenLines });
+    GAME.save();
+    this.scene.start('Cutscene', { id: 'lastnoon', next: { scene: 'Game', data: { world: 'lastnoon' } } });
   }
 
   retry() {

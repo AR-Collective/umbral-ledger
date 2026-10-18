@@ -145,6 +145,24 @@ export function curve(ctx, pts) {
 
 // ---------------- light on painted things ----------------
 
+// A solid outline `r` px thick around whatever is painted on `canvas`, padded
+// by `r` on every side. Used to mark things you can collide with or burn on.
+export function outline(canvas, color, r = 3) {
+  const w = canvas.width + r * 2, h = canvas.height + r * 2;
+  const o = makeCanvas(w, h);
+  const ctx = o.getContext('2d');
+  for (let a = 0; a < 16; a++) {
+    const t = (a / 16) * Math.PI * 2;
+    ctx.drawImage(canvas, r + Math.cos(t) * r, r + Math.sin(t) * r);
+  }
+  ctx.globalCompositeOperation = 'source-in';
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, w, h);
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.drawImage(canvas, r, r);
+  return o;
+}
+
 // Adds a thin moonlit rim along the top (and a little to the left) of whatever
 // is already painted on `canvas`. Works on any silhouette.
 export function rimLight(canvas, color, alpha = 0.6, dx = 1, dy = 2, blur = 0.8) {

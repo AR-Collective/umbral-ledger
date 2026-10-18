@@ -6,6 +6,7 @@ import { TITLE, CONTROLS, GAMEPAD_CONTROLS } from '../story.js';
 import { GAME } from '../systems/state.js';
 import { AUDIO } from '../systems/audio.js';
 import { DEV } from '../dev/devFlags.js';
+import { addSoundToggle } from '../systems/soundToggle.js';
 
 const HI_RES = 2; // 2K (2560x1440) title screen rendering for crisp key art and typography
 
@@ -99,6 +100,7 @@ export class TitleScene extends Phaser.Scene {
     this.keys = this.input.keyboard.addKeys('UP,DOWN,W,S,E,ENTER,SPACE,ESC');
     this.input.keyboard.on('keydown', () => this.onAny());
     this.input.on('pointerdown', () => this.onAny());
+    addSoundToggle(this, W - 40, 36);
   }
 
   onAny() {
@@ -111,13 +113,23 @@ export class TitleScene extends Phaser.Scene {
     for (const k of Object.values(this.keys)) Phaser.Input.Keyboard.JustDown(k);
   }
 
-  buildMenu() {
+  buildMenu(view = 'main') {
     const { width: W } = TUNING.view;
     const hasSave = GAME.hasSave();
     this.entries = [];
-    if (hasSave) this.entries.push(['Continue', () => this.continueGame()]);
-    this.entries.push(['New game', () => this.newGame()]);
-    this.entries.push(['Controls', () => this.showControls()]);
+    this.sel = 0;
+    if (view === 'chapters') {
+      // Jump straight into any world (for judges, and for filming the trailer).
+      this.entries.push(['Prologue: The Hourglass Hall', () => this.newGame()]);
+      this.entries.push(['World 1: Hollowmere', () => this.startChapter('hollowmere')]);
+      this.entries.push(['World 7: The Last Noon  (final world)', () => this.startChapter('lastnoon')]);
+      this.entries.push(['Back', () => { AUDIO.play('ui'); this.buildMenu('main'); }]);
+    } else {
+      if (hasSave) this.entries.push(['Continue', () => this.continueGame()]);
+      this.entries.push(['New game', () => this.newGame()]);
+      this.entries.push(['Chapters', () => { AUDIO.play('ui'); this.buildMenu('chapters'); }]);
+      this.entries.push(['Controls', () => this.showControls()]);
+    }
     this.items.forEach((t) => t.destroy());
     this.items = this.entries.map(([label], i) => this.add.text(W / 2, 520 + i * 48 - (this.entries.length - 2) * 24, label, {
       fontFamily: '"Cormorant Garamond", Georgia, serif', fontSize: '32px', color: '#a9a3bd', resolution: HI_RES,
@@ -142,6 +154,21 @@ export class TitleScene extends Phaser.Scene {
         this.scene.start('Game', { world: 'prologue' });
       } else {
         this.scene.start('Cutscene', { id: 'intro', next: { scene: 'Game', data: { world: 'prologue' } } });
+      }
+    });
+  }
+
+  startChapter(world) {
+    AUDIO.play('uiSelect');
+    if (world === 'lastnoon') GAME.setupFinalWorld();
+    else { GAME.newRun(); GAME.enterWorld(world); }
+    this.cameras.main.fadeOut(900, 0, 0, 0);
+    this.cameras.main.once('camerafadeoutcomplete', () => {
+      if (DEV.skipCutscenes) {
+        this.scale.setGameSize(TUNING.view.width, TUNING.view.height);
+        this.scene.start('Game', { world });
+      } else {
+        this.scene.start('Cutscene', { id: world, next: { scene: 'Game', data: { world } } });
       }
     });
   }

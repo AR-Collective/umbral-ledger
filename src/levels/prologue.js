@@ -72,7 +72,7 @@ export default {
     // ---------------- D. pillar gallery: Merge behind cover ----------------
     for (const x of [1800, 2040, 2280, 2520, 2760]) b.pillar(x, FLOOR, 60, 550);
     b.watcher({ id: 'g1', type: 'guardian', x: 2300, y: FLOOR, patrol: [1910, 2700], wait: 1.8, facing: -1, bounds: [1860, 2740] });
-    b.trigger({ id: 'guard', x: 1640, y: 0, w: 80, h: 900, lines: ['p_guardian1', 'p_merge_hint', 'p_guardian2'] });
+    b.trigger({ id: 'guard', x: 1640, y: 0, w: 80, h: 900, lines: ['p_guardian1', 'p_merge_hint', 'p_guardian2', 'p_guardian_hint'] });
 
     // ---------------- E. the acolyte: strike from behind ----------------
     b.solid(3090, FLOOR - 40, 44, 40, { style: 'hall', top: false });
@@ -151,7 +151,7 @@ export default {
   },
 
   onStillpoint(scene, sp) {
-    if (sp.id === 'p1') scene.playLines(['p_stillpoint']);
+    if (sp.id === 'p1') scene.playLines(['p_stillpoint', 'p_stillpoint_hint']);
   },
 
   onPickup(scene, item) {

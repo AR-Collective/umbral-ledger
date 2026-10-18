@@ -12,8 +12,9 @@ import { TUNING, resistanceFor } from '../tuning.js';
 import { GAME } from '../systems/state.js';
 import { AUDIO } from '../systems/audio.js';
 import { bus } from '../systems/bus.js';
-import { SPEAKERS, CONTROLS, GAMEPAD_CONTROLS, LEDGER_TEXT, COMBOS } from '../story.js';
+import { SPEAKERS, CONTROLS, GAMEPAD_CONTROLS, LEDGER_TEXT, COMBOS, FRAGMENT_LEDGER } from '../story.js';
 import * as BR from '../systems/branches.js';
+import { addSoundToggle, toggleSound } from '../systems/soundToggle.js';
 
 const SERIF = '"Cormorant Garamond", Georgia, serif';
 const TITLE = 'Cinzel, Georgia, serif';
@@ -38,6 +39,7 @@ export class HUDScene extends Phaser.Scene {
     this.sandIcons = [];
     for (let i = 0; i < 3; i++) this.sandIcons.push(this.add.image(34 + i * 22, 78, 'icon_sand'));
     this.glyph = this.add.image(W - 40, 38, 'glyph_shade').setScale(1.2);
+    this.soundIcon = addSoundToggle(this, W - 84, 38);
     // Substance: shown whenever you are hurt. The notches mark one burn tick each,
     // so you can count how many seconds of light you can still survive.
     this.barGfx = this.add.graphics();
@@ -54,8 +56,11 @@ export class HUDScene extends Phaser.Scene {
     }).setOrigin(0.5, 0);
 
     // ---- hint (bottom left) ----
-    this.hintBg = this.add.rectangle(20, H - 30, 10, 34, 0x000000, 0.55).setOrigin(0, 0.5).setAlpha(0);
-    this.hint = this.add.text(36, H - 30, '', { fontFamily: SANS, fontSize: '16px', color: '#cfc9de', wordWrap: { width: 640 } }).setOrigin(0, 0.5).setAlpha(0);
+    // Hints wait their turn (two in a row would otherwise replace each other at
+    // once), and the backing grows upward with the text.
+    this.hintQueue = [];
+    this.hintBg = this.add.rectangle(20, H - 13, 10, 34, 0x000000, 0.55).setOrigin(0, 1).setAlpha(0);
+    this.hint = this.add.text(36, H - 21, '', { fontFamily: SANS, fontSize: '16px', color: '#cfc9de', wordWrap: { width: 640 }, lineSpacing: 3 }).setOrigin(0, 1).setAlpha(0);
 
     // ---- toast (top center) ----
     this.toastText = this.add.text(W / 2, 40, '', {
@@ -76,6 +81,7 @@ export class HUDScene extends Phaser.Scene {
     this.deathText = this.add.text(W / 2, H / 2 - 30, '', { fontFamily: SERIF, fontSize: '42px', color: '#efe3d0' }).setOrigin(0.5).setAlpha(0);
     this.threadText = this.add.text(W / 2, H / 2 + 30, '', { fontFamily: SERIF, fontStyle: 'italic', fontSize: '26px', color: '#d9cbb0' }).setOrigin(0.5).setAlpha(0);
 
+    this.buildPowerHud();
     this.buildBranchPanel();
     this.buildPauseMenu();
 
@@ -94,12 +100,156 @@ export class HUDScene extends Phaser.Scene {
       'branch:result': (r) => this.branchResult(r),
       'pause:open': (tab) => this.openPause(tab),
       burnTick: () => this.onBurnTick(),
+      levelup: (it) => this.showLevelUp(it),
+      ledgerIntro: () => this.showFragmentLedger(),
+      boss: (b) => this.onBoss(b),
+      'eclipse:ready': () => this.showToast('Eclipse is ready (I).', 1600),
     };
     for (const [k, fn] of Object.entries(handlers)) bus.on(k, fn);
     this.events.once('shutdown', () => { for (const [k, fn] of Object.entries(handlers)) bus.off(k, fn); });
   }
 
   gs() { return this.scene.get('Game'); }
+
+  // ------------------------------------------------------------------
+  // The final world's power HUD: skill bar, level-ups, the fragment ledger, the boss
+  // ------------------------------------------------------------------
+  buildPowerHud() {
+    const { W, H } = this;
+    // skill bar, bottom right: [J strike] [K dash] [L ember] [U echo] [I eclipse]
+    this.skillSlots = ['strike', 'dash', 'ember', 'echo', 'eclipse'].map((id, i, all) => {
+      const x = W - 36 - (all.length - 1 - i) * 58, y = 104;     // top right, under the light glyph
+      const icon = this.add.image(x, y, `ab_${id}`).setScale(1.05);
+      const key = this.add.text(x + 18, y + 16, { strike: 'J', dash: 'K', ember: 'L', echo: 'U', eclipse: 'I' }[id], {
+        fontFamily: SANS, fontSize: '12px', fontStyle: 'bold', color: '#efe6ff', stroke: '#000', strokeThickness: 3,
+      }).setOrigin(0.5);
+      return { id, x, y, icon, key };
+    });
+    this.skillGfx = this.add.graphics().setDepth(-0.5);
+    this.skillFx = this.add.graphics();
+    this.skillSlots.forEach((sl) => { sl.icon.setDepth(1); sl.key.setDepth(2); });
+    this.skillVisible = false;
+
+    // LEVEL UP banner, centre
+    this.lvl = this.add.container(W / 2, 250).setAlpha(0).setDepth(50);
+    const streak = this.add.image(0, 6, 'slash_fx').setScale(5.5, 1.4).setAlpha(0.55).setBlendMode('ADD');
+    this.lvlHead = this.add.text(0, -36, 'LEVEL UP', { fontFamily: TITLE, fontSize: '54px', color: '#f6e7c1', letterSpacing: 12 }).setOrigin(0.5).setShadow(0, 0, '#9a5cff', 24, true, true);
+    this.lvlTitle = this.add.text(0, 22, '', { fontFamily: TITLE, fontSize: '24px', color: GOLD, letterSpacing: 5 }).setOrigin(0.5);
+    this.lvlText = this.add.text(0, 58, '', { fontFamily: SERIF, fontStyle: 'italic', fontSize: '24px', color: '#efe6ff', align: 'center', wordWrap: { width: 760 }, stroke: '#000', strokeThickness: 4 }).setOrigin(0.5, 0);
+    this.lvl.add([streak, this.lvlHead, this.lvlTitle, this.lvlText]);
+
+    // The Ledger of Fragments, left of centre
+    this.frag = this.add.container(70, 150).setAlpha(0).setDepth(49);
+    const bg = this.add.rectangle(-30, -30, 560, 420, 0x06030c, 0.82).setOrigin(0).setStrokeStyle(1, 0xe8c372, 0.5);
+    const head = this.add.text(0, -10, 'THE LEDGER OF FRAGMENTS', { fontFamily: TITLE, fontSize: '22px', color: GOLD, letterSpacing: 5 });
+    const sub = this.add.text(0, 22, 'Six of seven pieces of him have come home.', { fontFamily: SERIF, fontStyle: 'italic', fontSize: '20px', color: '#cfc6e0' });
+    this.frag.add([bg, head, sub]);
+    this.fragRows = FRAGMENT_LEDGER.map(([num, world, power, what], i) => {
+      const y = 66 + i * 46;
+      const row = this.add.container(0, y).setAlpha(0);
+      const last = i === FRAGMENT_LEDGER.length - 1;
+      row.add(this.add.text(0, 0, num, { fontFamily: TITLE, fontSize: '18px', color: last ? '#6f6a82' : GOLD }).setOrigin(0, 0));
+      row.add(this.add.text(44, 0, world, { fontFamily: SERIF, fontSize: '20px', color: last ? '#8f8aa3' : '#e9e2f5' }));
+      row.add(this.add.text(250, -2, power, { fontFamily: TITLE, fontSize: '17px', color: last ? '#6f6a82' : '#c9a8ff', letterSpacing: 2 }));
+      row.add(this.add.text(250, 20, what, { fontFamily: SERIF, fontStyle: 'italic', fontSize: '15px', color: '#9f98b5' }));
+      this.frag.add(row);
+      return row;
+    });
+
+    // Boss bar, top centre
+    this.bossBox = this.add.container(W / 2, 30).setAlpha(0).setDepth(48);
+    this.bossName = this.add.text(0, 0, '', { fontFamily: TITLE, fontSize: '20px', color: '#fff1c0', letterSpacing: 8 }).setOrigin(0.5, 0).setShadow(0, 0, '#ff9a40', 14, true, true);
+    this.bossState = this.add.text(0, 58, '', { fontFamily: SANS, fontSize: '13px', color: '#e8c372', letterSpacing: 2 }).setOrigin(0.5, 0);
+    this.bossGfx = this.add.graphics();
+    // a dark backing: the boss bar sits right over the white sun in the sky
+    const back = this.add.rectangle(0, 38, 420, 86, 0x0a0406, 0.62).setStrokeStyle(1, 0xe8c372, 0.35);
+    this.bossBox.add([back, this.bossGfx, this.bossName, this.bossState]);
+    this.boss = null;
+  }
+
+  showLevelUp(it) {
+    this.tweens.killTweensOf(this.lvl);
+    const levelUp = !/AWAKENED/.test(it.title ?? '');
+    this.lvlHead.setText(levelUp ? 'LEVEL UP' : 'AWAKENED');
+    this.lvlTitle.setText((it.title ?? '').replace('ABILITY AWAKENED: ', ''));
+    this.lvlText.setText(it.text ?? '');
+    this.lvl.setAlpha(0).setScale(0.8);
+    this.tweens.add({ targets: this.lvl, alpha: 1, scale: 1, duration: 280, ease: 'Back.easeOut' });
+    this.tweens.add({ targets: this.lvl, alpha: 0, duration: 600, delay: 4200 });
+  }
+
+  showFragmentLedger() {
+    this.tweens.killTweensOf(this.frag);
+    this.frag.setAlpha(0).setX(40);
+    this.tweens.add({ targets: this.frag, alpha: 1, x: 70, duration: 500, ease: 'Cubic.easeOut' });
+    this.fragRows.forEach((row, i) => {
+      row.setAlpha(0).setX(-20);
+      this.tweens.add({ targets: row, alpha: 1, x: 0, duration: 300, delay: 600 + i * 420, onStart: () => AUDIO.play(i < 6 ? 'ui' : 'uiSelect') });
+    });
+    this.tweens.add({ targets: this.frag, alpha: 0, duration: 800, delay: 600 + FRAGMENT_LEDGER.length * 420 + 2600 });
+  }
+
+  onBoss(b) {
+    this.boss = b;
+    const show = b.state !== 'idle' && b.state !== 'dead';
+    this.tweens.killTweensOf(this.bossBox);
+    this.tweens.add({ targets: this.bossBox, alpha: show ? 1 : 0, duration: show ? 400 : 1500, delay: b.state === 'dying' ? 1500 : 0 });
+    this.bossName.setText(b.name);
+    this.bossState.setText(b.state === 'stagger' ? 'HE KNEELS. STRIKE THE CORE!' : b.shield ? `SHIELD: ${b.lit} BRAZIER${b.lit === 1 ? '' : 'S'} BURNING` : b.state === 'dying' ? 'THE SUN IS BREAKING' : '')
+      .setColor(b.state === 'stagger' ? '#ffffff' : '#e8c372');
+    const g = this.bossGfx;
+    g.clear();
+    for (let i = 0; i < b.total; i++) {
+      const x = (i - (b.total - 1) / 2) * 40, y = 42;
+      const done = i < b.cracks;
+      g.fillStyle(done ? 0x2a1810 : 0xfff1c0, done ? 0.9 : 0.95);
+      g.fillPoints([{ x, y: y - 11 }, { x: x + 11, y }, { x, y: y + 11 }, { x: x - 11, y }], true);
+      g.lineStyle(2, 0xe8c372, 1);
+      g.strokePoints([{ x, y: y - 11 }, { x: x + 11, y }, { x, y: y + 11 }, { x: x - 11, y }], true);
+      if (done) { g.lineStyle(2, 0xffffff, 0.9); g.lineBetween(x - 6, y - 4, x + 5, y + 5); }
+    }
+  }
+
+  drawSkillBar(gs) {
+    const ab = gs.abilities;
+    const want = !!ab && GAME.data.abilities.length > 0;
+    if (want !== this.skillVisible) {
+      this.skillVisible = want;
+      this.skillSlots.forEach((sl) => { sl.icon.setVisible(want); sl.key.setVisible(want); });
+    }
+    const g = this.skillGfx, fx = this.skillFx;
+    g.clear(); fx.clear();
+    if (!want) return;
+    const st = ab.status();
+    const p = gs.player;
+    st.strike = { have: true, ready: p.strikeCd <= 0, k: 1 - Math.max(0, p.strikeCd) / TUNING.player.strikeCooldown };
+    for (const sl of this.skillSlots) {
+      const v = st[sl.id];
+      const show = v.have;
+      sl.icon.setVisible(show); sl.key.setVisible(show);
+      if (!show) continue;
+      g.fillStyle(0x06030c, 0.78);
+      g.fillRoundedRect(sl.x - 24, sl.y - 24, 48, 48, 8);
+      g.lineStyle(2, v.active ? 0xfff1c0 : v.ready ? 0x9a6bff : 0x3a3450, v.ready ? 1 : 0.8);
+      g.strokeRoundedRect(sl.x - 24, sl.y - 24, 48, 48, 8);
+      sl.icon.setAlpha(v.ready ? 1 : 0.45);
+      if (!v.ready && v.k < 1) {
+        // cooldown: the slot fills from the bottom as it comes back
+        const h = 44 * (1 - Math.max(0, v.k));
+        fx.fillStyle(0x000000, 0.55);
+        fx.fillRect(sl.x - 22, sl.y - 22, 44, h);
+      }
+      if (sl.id === 'eclipse') {
+        // the Eclipse charge: one pip per kill
+        const n = TUNING.abilities.eclipse.killsToCharge;
+        for (let i = 0; i < n; i++) {
+          fx.fillStyle(i < Math.round(v.k * n) ? 0xfff1c0 : 0x2a2438, 1);
+          fx.fillCircle(sl.x - 15 + i * 10, sl.y + 32, 3);
+        }
+        if (v.ready && !v.active) { fx.lineStyle(2, 0xfff1c0, 0.4 + Math.sin(this.time.now / 160) * 0.3); fx.strokeRoundedRect(sl.x - 28, sl.y - 28, 56, 56, 10); }
+      }
+    }
+  }
 
   onBurnTick() {
     this.tweens.killTweensOf(this.redPulse);
@@ -137,7 +287,8 @@ export class HUDScene extends Phaser.Scene {
     this.redPulse.setAlpha(0);
     this.barAlpha = 0;
     this.tweens.killTweensOf(this.toastText); this.toastText.setAlpha(0);
-    this.hint.setAlpha(0); this.hintBg.setAlpha(0); this.hintTimer = 0;
+    this.hint.setAlpha(0); this.hintBg.setAlpha(0); this.hintTimer = 0; this.hintQueue = [];
+    this.lvl?.setAlpha(0); this.frag?.setAlpha(0); this.bossBox?.setAlpha(0);
     this.deathShade.setAlpha(0); this.deathText.setAlpha(0); this.threadText.setAlpha(0);
     this.showForesight(false);
     this.branchPanel.setVisible(false);
@@ -177,9 +328,11 @@ export class HUDScene extends Phaser.Scene {
   }
 
   showHint(text) {
+    if (this.hintTimer > 0) { if (!this.hintQueue.includes(text) && this.hint.text !== text) this.hintQueue.push(text); return; }
+    this.tweens.killTweensOf([this.hint, this.hintBg]);
     this.hint.setText(text);
-    this.hintBg.width = this.hint.width + 32;
-    this.hintTimer = 7;
+    this.hintBg.setSize(this.hint.width + 32, this.hint.height + 16);
+    this.hintTimer = 4 + text.length / 22;
     this.tweens.add({ targets: [this.hint, this.hintBg], alpha: 1, duration: 300 });
   }
 
@@ -234,6 +387,7 @@ export class HUDScene extends Phaser.Scene {
     const st = p.lightInfo.state;
     this.glyph.setTexture(st === 'light' ? 'glyph_light' : st === 'dim' ? 'glyph_dim' : 'glyph_shade');
     this.drawSubstanceBar(dt, p, showThreads ? 104 : 62);
+    this.drawSkillBar(gs);
 
     // The conversation queue. Entity lines are subtitles with a typewriter;
     // anyone else speaks in the world and the queue waits for them.
@@ -277,7 +431,10 @@ export class HUDScene extends Phaser.Scene {
     // Hint timer
     if (this.hintTimer > 0) {
       this.hintTimer -= dt;
-      if (this.hintTimer <= 0) this.tweens.add({ targets: [this.hint, this.hintBg], alpha: 0, duration: 500 });
+      if (this.hintTimer <= 0) {
+        if (this.hintQueue.length) this.showHint(this.hintQueue.shift());
+        else this.tweens.add({ targets: [this.hint, this.hintBg], alpha: 0, duration: 500 });
+      }
     }
 
     // Prompt
@@ -456,7 +613,7 @@ export class HUDScene extends Phaser.Scene {
     const s = gs.settings;
     if (this.pView === 'settings') {
       return [
-        ['Sound: ' + (s.muted ? 'off' : 'on'), () => { s.muted = !s.muted; AUDIO.setMuted(s.muted); }],
+        ['Sound: ' + (s.muted ? 'off' : 'on'), () => toggleSound(this.registry)],
         ['Screen shake: ' + (s.shake ? 'on' : 'off'), () => { s.shake = !s.shake; }],
         ['Always show Substance: ' + (s.fullHud ? 'on' : 'off'), () => { s.fullHud = !s.fullHud; }],
         ['Back', () => { this.pView = 'menu'; this.pSel = 0; }],

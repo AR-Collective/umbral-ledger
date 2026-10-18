@@ -16,10 +16,12 @@ import { AUDIO } from '../systems/audio.js';
 import { SHADE, DIM, LIGHT } from '../systems/lighting.js';
 import { feetOrigin } from '../art/characters.js';
 import { hasShaders } from '../systems/fx.js';
+import { GAME } from '../systems/state.js';
 
 const GLOW_SHADE = 0x8a5cff;
 const GLOW_DIM = 0xe0d4ff;
 const GLOW_LIGHT = 0xff6a1a;
+const GLOW_ECLIPSE = 0xfff1c0;
 
 export class Player {
   constructor(scene, x, feetY) {
@@ -57,6 +59,12 @@ export class Player {
     this.noclip = false;
     this.inCover = false;
     this.dissolveT = 0;
+    this.clinging = false;      // Cling: sliding down a wall
+    this.clingDir = 0;
+    this.clingGrace = 0;        // a wall kick still works a moment after letting go
+    this.lockT = 0;             // no steering for a moment (a wall kick, a knockback)
+    this.eclipseT = 0;          // Eclipse: light cannot touch you
+    this.ghostT = 0;
 
     // ---- visuals ----
     const [ox, oy] = feetOrigin('shade');
@@ -166,6 +174,9 @@ export class Player {
     this.dashCd -= dt;
     this.strikeCd -= dt;
     this.strikeAnim -= dt;
+    this.lockT -= dt;
+    this.guardT = Math.max(0, (this.guardT ?? 0) - dt);
+    this.eclipseT = Math.max(0, this.eclipseT - dt);
     if (this.dead || this.frozen) {
       b.setVelocityX(0);
       if (this.dead) { b.setVelocityY(0); b.setAllowGravity(false); }
@@ -202,6 +213,7 @@ export class Player {
     if (c.pressed('dash') && this.dashCd <= 0 && !this.merged) {
       this.dashT = T.dashTime;
       this.dashCd = T.dashCooldown;
+      this.dashId = (this.dashId ?? 0) + 1;
       b.setVelocityY(0);
       this.scene.emitNoise(this.x, this.y, TUNING.noise.dash, 'dash');
       AUDIO.play('dash');
@@ -211,6 +223,14 @@ export class Player {
     if (this.dashT > 0) {
       this.dashT -= dt;
       b.setVelocity(this.facing * T.dashSpeed, 0);
+      // Shadow Dash: afterimages, and anything weak in the way is cut down
+      if (GAME.hasAbility('dashCut')) {
+        this.ghostT -= dt;
+        if (this.ghostT <= 0) { this.ghostT = 0.025; this.scene.abilities?.afterimage(this); }
+        this.scene.abilities?.dashCut(this);
+      }
+    } else if (this.lockT > 0) {
+      // a wall kick or a knockback carries you; steering comes back in a moment
     } else {
       const max = this.merged ? T.mergedSpeed : T.runSpeed;
       const target = dir * max;
@@ -219,6 +239,29 @@ export class Player {
       const step = accel * dt;
       b.setVelocityX(Math.abs(target - vx) <= step ? target : vx + Math.sign(target - vx) * step);
       if (dir !== 0) this.tryStepUp(dir);
+    }
+
+    // Cling: pressing into a wall in the air, you slide down it instead of falling,
+    // and jumping kicks you off the other way.
+    const wallDir = (b.blocked.right || b.touching.right) ? 1 : (b.blocked.left || b.touching.left) ? -1 : 0;
+    const C = TUNING.abilities.cling;
+    this.clinging = GAME.hasAbility('cling') && !onFloor && !this.merged && this.dashT <= 0 && wallDir !== 0 && dir === wallDir && b.velocity.y > -60;
+    if (this.clinging) {
+      this.clingDir = wallDir;
+      this.clingGrace = 0.12;
+      if (b.velocity.y > C.slide) b.setVelocityY(C.slide);
+      this.facing = wallDir;
+      this.coyote = 0;
+    } else this.clingGrace -= dt;
+    if (this.jumpBuf > 0 && this.clingGrace > 0 && !onFloor && this.dashT <= 0) {
+      b.setVelocity(-this.clingDir * C.kickX, -C.kickY);
+      this.facing = -this.clingDir;
+      this.lockT = C.lockTime;
+      this.jumpBuf = 0;
+      this.clingGrace = 0;
+      this.clinging = false;
+      AUDIO.play('jump', { vol: 0.9 });
+      this.scene.abilities?.wallKickFx(this);
     }
 
     // Jumping (with coyote time and a buffer so it never eats an input).
@@ -269,6 +312,14 @@ export class Player {
       this.scene.tryStrike(this);
     }
 
+    // Returned powers (the Abilities system checks which ones you have).
+    const ab = this.scene.abilities;
+    if (ab) {
+      if (c.pressed('ember')) ab.ember(this);
+      if (c.pressed('echo')) ab.echo(this);
+      if (c.pressed('eclipse')) ab.eclipse(this);
+    }
+
     this.animate(dt);
   }
 
@@ -278,7 +329,7 @@ export class Player {
     const R = resistanceFor(level);
     const L = TUNING.light;
     this.lightInfo = info;
-    const lit = info.state === LIGHT && !godMode;
+    const lit = info.state === LIGHT && !godMode && this.eclipseT <= 0;
 
     if (lit) {
       this.outOfLight = 0;
@@ -325,6 +376,7 @@ export class Player {
       if (this.strikeAnim > 0 && !this.merged) anim = 'shade_strike';
       else if (this.merged) anim = Math.abs(vx) > 15 ? 'shade_mergeMove' : 'shade_merge';
       else if (this.dashT > 0) anim = 'shade_dash';
+      else if (this.clinging) anim = 'shade_fall';
       else if (!onFloor && !this.noclip) anim = vy < -60 ? 'shade_rise' : 'shade_fall';
       else if (Math.abs(vx) > 30) anim = 'shade_run';
       else anim = 'shade_idle';
@@ -347,7 +399,10 @@ export class Player {
     const state = this.lightInfo.state;
     const hidden = this.merged && (this.inCover || state === SHADE);
     if (this.glow) {
-      if (this.burnVis > 0.08) {
+      if (this.eclipseT > 0) {
+        this.glow.color = GLOW_ECLIPSE;
+        this.glow.outerStrength = 5 + Math.sin(this.time * 14) * 1.5;
+      } else if (this.burnVis > 0.08) {
         this.glow.color = GLOW_LIGHT;
         this.glow.outerStrength = 4 + this.burnVis * 4 + Math.sin(this.time * 18) * 1.2 + this.flash * 6;
       } else if (state === DIM) {
@@ -371,6 +426,22 @@ export class Player {
     this.embers.emitting = !this.dead && this.burnVis > 0.15;
     this.burnSmoke.emitting = !this.dead && this.burnVis > 0.15;
     this.wisps.emitting = !this.dead;
+  }
+
+  // Thrown back by a blow (the Last Noon's grabs hurt instead of killing).
+  knock(dir, power) {
+    this.setMerged(false);
+    this.body.setVelocity(dir * power, -320);
+    this.lockT = 0.35;
+    this.dashT = 0;
+  }
+
+  // Damage that is not light: a blow, a sun-lance.
+  hurt(damage) {
+    this.substance -= damage;
+    this.sinceDamage = 0;
+    this.flash = 1;
+    this.tickBurst.explode(22, this.x, this.y - 6);
   }
 
   die(cause) {

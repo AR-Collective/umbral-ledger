@@ -27,6 +27,8 @@ import { AUDIO } from '../systems/audio.js';
 import { bus } from '../systems/bus.js';
 import { DEV, saveDev } from '../dev/devFlags.js';
 import { hasShaders } from '../systems/fx.js';
+import { toggleSound } from '../systems/soundToggle.js';
+import { Abilities } from '../systems/abilities.js';
 import { LINES, DEATH_TEXT, THREAD_TEXT, TOASTS, COMBOS, BRANCH_TEXT, WHISPERS } from '../story.js';
 import * as BR from '../systems/branches.js';
 
@@ -65,8 +67,15 @@ export class GameScene extends Phaser.Scene {
     this.noiseRings = [];
     this.decor = {};
     this.drifters = [];
+    this.snuffables = [];     // fires and lamps Black Ember can put out
+    this.boss = null;         // a level's boss, if it has one (update, emberHit, corona)
 
     this.simTime = 0;
+    // Phaser reuses this scene object on every restart: per-run level state set
+    // by level scripts must be cleared, or a chase you died in keeps running.
+    this.chase = null;
+    this.clockOn = false;
+    this.clockRate = undefined;
     this.dying = false;
     this.modal = false;
     this.ended = false;
@@ -91,6 +100,7 @@ export class GameScene extends Phaser.Scene {
     this.currentSpawn = spawn;
     this.player = new Player(this, spawn.x, spawn.y);
     this.player.facing = spawn.facing ?? 1;
+    this.abilities = new Abilities(this);
 
     // ---- survivors ----
     const following = GAME.flag('survivors') === 'follow';
@@ -155,6 +165,8 @@ export class GameScene extends Phaser.Scene {
       bus.off('pause:resume', onResume);
       bus.off('pause:unravel', onUnravel);
       bus.off('pause:quit', onQuit);
+      this.abilities?.destroy();
+      this.boss?.destroy?.();
       this.player?.destroy();
     });
 
@@ -210,6 +222,7 @@ export class GameScene extends Phaser.Scene {
       this.decor.layers = [];
       return;
     }
+    if (sky === 'noon') { this.buildNoonBackground(); return; }
     this.decor.sky = this.add.image(0, 0, 'sky_night').setOrigin(0).setScrollFactor(0).setDisplaySize(width, height).setDepth(0);
     this.decor.dawnSky = this.add.image(0, 0, 'sky_dawn').setOrigin(0).setScrollFactor(0).setDisplaySize(width, height).setDepth(0.1).setAlpha(0);
     this.decor.stars = this.layer('stars', 0.02, 0.0, 380, 380, 0.5);
@@ -231,6 +244,33 @@ export class GameScene extends Phaser.Scene {
     ];
   }
 
+  // The Last Noon: an ash sky lit red from below, and in it the sun that will not move.
+  buildNoonBackground() {
+    const { width, height } = TUNING.view;
+    const S0 = this.baseScrollY();
+    this.decor.sky = this.add.image(0, 0, 'sky_noon').setOrigin(0).setScrollFactor(0).setDisplaySize(width, height).setDepth(0);
+    this.decor.sunHalo = this.add.image(640, 70 + S0 * 0.02, 'softglow').setScrollFactor(0.02).setDepth(0.6).setBlendMode('ADD').setTint(0xfff0c8).setScale(9).setAlpha(0.45);
+    this.decor.sun = this.add.image(640, 70 + S0 * 0.02, 'flare').setScrollFactor(0.02).setDepth(0.7).setBlendMode('ADD').setTint(0xffffff).setScale(5).setAlpha(0.95);
+    this.decor.sunRing = this.add.image(640, 70 + S0 * 0.02, 'warden_halo').setScrollFactor(0.02).setDepth(0.75).setBlendMode('ADD').setScale(0.9).setAlpha(0.55);
+    this.tweens.add({ targets: this.decor.sunRing, angle: 360, duration: 60000, repeat: -1 });
+    this.decor.layers = [
+      this.layer('noon_ash_a', 0.05, 0.02, 330, 300, 1, { drift: 8, alpha: 0.9 }),
+      this.layer('noon_ridge', 0.1, 0.05, 520, 330, 2),
+      this.layer('fog_band', 0.12, 0.06, 560, 220, 2.5, { tint: 0xff5a1a, alpha: 0.3, drift: 5 }),
+      this.layer('noon_skyline_far', 0.22, 0.1, 570, 360, 3),
+      this.layer('noon_ash_b', 0.09, 0.03, 260, 240, 3.2, { drift: 14, alpha: 0.6 }),
+      this.layer('fog_band', 0.3, 0.14, 600, 220, 4.5, { tint: 0xff7a2a, alpha: 0.28, drift: 9 }),
+      this.layer('noon_skyline_near', 0.38, 0.18, 595, 420, 5),
+    ];
+    // fires burning on the far skyline
+    for (let i = 0; i < 6; i++) {
+      this.add.particles(0, 0, 'spark', {
+        x: { min: 0, max: width }, y: { min: 420, max: 560 }, lifespan: 2400, speedY: { min: -40, max: -12 }, scale: { min: 0.3, max: 0.9 },
+        alpha: { start: 0.8, end: 0 }, tint: [0xffb050, 0xff6a20], blendMode: 'ADD', frequency: 140,
+      }).setScrollFactor(0).setDepth(4.8);
+    }
+  }
+
   buildAtmosphere(level) {
     const { width } = TUNING.view;
     this.fogMul = 1;
@@ -244,6 +284,23 @@ export class GameScene extends Phaser.Scene {
         scale: { min: 0.15, max: 0.4 }, alpha: { onEmit: () => 0, onUpdate: (p, k, t) => Math.sin(t * Math.PI) * 0.45 },
         tint: 0xcfd8ff, blendMode: 'ADD', frequency: 140,
       }).setScrollFactor(0).setDepth(26);
+      return;
+    }
+    if (level.sky === 'noon') {
+      // ash falling, embers rising, a heat-haze of orange in front of everything
+      this.decor.motes = this.add.particles(0, 0, 'spark', {
+        x: { min: 0, max: width }, y: { min: 300, max: 760 }, lifespan: 5000, speedX: { min: -10, max: 20 }, speedY: { min: -70, max: -20 },
+        scale: { min: 0.25, max: 0.8 }, alpha: { onEmit: () => 0, onUpdate: (pp, k, t) => Math.sin(t * Math.PI) * 0.8 },
+        tint: [0xffd08a, 0xff8a30, 0xff5a1a], blendMode: 'ADD', frequency: 45,
+      }).setScrollFactor(0).setDepth(53);
+      this.add.particles(0, 0, 'smoke', {
+        x: { min: 0, max: width }, y: -20, lifespan: 9000, speedX: { min: -8, max: 8 }, speedY: { min: 18, max: 40 },
+        scale: { min: 0.15, max: 0.35 }, alpha: { start: 0.5, end: 0 }, tint: 0x2a1410, frequency: 120,
+      }).setScrollFactor(0).setDepth(53);
+      this.decor.nearFog = [
+        this.add.tileSprite(0, 420, width, 300, 'fog_band').setOrigin(0).setScrollFactor(0).setDepth(52).setTint(0xff6a2a).setAlpha(0.1),
+        this.add.tileSprite(0, 520, width, 260, 'fog_band').setOrigin(0).setScrollFactor(0).setDepth(52).setTint(0xb8401a).setAlpha(0.08),
+      ];
       return;
     }
     if (!level.fog) return;
@@ -315,6 +372,7 @@ export class GameScene extends Phaser.Scene {
   targets() {
     const list = [this.playerTarget()];
     for (const sv of this.survivors) if (sv.alive && !sv.hidden) list.push(sv.target());
+    if (this.abilities) list.push(...this.abilities.targets());
     return list;
   }
 
@@ -333,12 +391,12 @@ export class GameScene extends Phaser.Scene {
   // Main loop
   // ------------------------------------------------------------------
   update(time, delta) {
-    const dt = Math.min(delta / 1000, 1 / 20) * (this.registry.get('timeScale') ?? 1);
+    const dt = Math.min(delta / 1000, 1 / 20) * (this.registry.get('timeScale') ?? 1) * (this.abilities?.timeWarp() ?? 1);
     const c = this.controls;
     c.update();
     const cam = this.cameras.main;
 
-    if (c.pressed('mute')) { this.settings.muted = !this.settings.muted; AUDIO.setMuted(this.settings.muted); }
+    if (c.pressed('mute')) toggleSound(this.registry);
     if (c.pressed('hud')) this.settings.fullHud = !this.settings.fullHud;
 
     if (this.modal) {
@@ -378,9 +436,11 @@ export class GameScene extends Phaser.Scene {
     this.updateInteract(c);
 
     p.update(dt, c);
+    this.abilities.update(dt);
     for (const sv of this.survivors) sv.update(dt, p);
     for (const w of this.watchers) w.step(dt);
     if (this.wick) this.wick.update(dt, p);
+    this.boss?.update(dt, p);
     this.level.onUpdate?.(this, dt);
     this.updateSwingers();
 
@@ -453,6 +513,14 @@ export class GameScene extends Phaser.Scene {
       f2.tilePositionX = cam.scrollX * 1.25 + this.simTime * 24;
       f1.setAlpha(0.04 + fogHere * 0.14);
       f2.setAlpha(0.03 + fogHere * 0.12);
+    }
+    // The foreground grass grows along the street. Below street level (the
+    // cellars) it would hang across the room, so it fades out down there.
+    const grass = this.decor.fgGrass;
+    if (grass) {
+      const below = cam.scrollY - this.baseScrollY();
+      const want = Phaser.Math.Clamp(1 - (below - 50) / 70, 0, 1);
+      grass.setAlpha(grass.alpha + (want - grass.alpha) * Math.min(1, dt * 6));
     }
   }
 
@@ -614,8 +682,24 @@ export class GameScene extends Phaser.Scene {
 
   onCaught(w, target) {
     if (this.dying || this.ended) return;
+    if (target.kind === 'decoy') { this.abilities.popEcho(target.id); w.s.mode = 'search'; w.s.searchT = 0; return; }
     if (target.kind === 'player') {
       if (DEV.god) return;
+      // In the Last Noon you are strong enough to take a blow: it hurts and throws you back.
+      if (this.level.grabsHurt) {
+        const G = TUNING.grab;
+        const p = this.player;
+        if (p.guardT > 0) return;          // a moment after a blow, no second one
+        p.guardT = 0.9;
+        p.hurt(G.damage);
+        p.knock(Math.sign(p.x - w.x) || 1, G.knockback);
+        w.stun(G.cooldown);
+        AUDIO.play('burnTick', { vol: 1 });
+        if (this.settings.shake) this.cameras.main.shake(180, 0.006);
+        bus.emit('burnTick', G.damage, p.substance / TUNING.player.maxSubstance);
+        if (p.substance <= 0) this.killPlayer('caught');
+        return;
+      }
       this.killPlayer('caught');
     } else {
       const sv = this.survivors.find((s) => s.id === target.id);
@@ -624,6 +708,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   tryStrike(p) {
+    if (this.boss?.strikeHit(p)) return;
     let target = null, kind = null;
     for (const w of this.watchers) {
       if (!w.canBeTakenDown()) continue;
@@ -757,6 +842,8 @@ export class GameScene extends Phaser.Scene {
         this.setFlag(`sand:${it.id}`, true);
         AUDIO.play('sand');
         this.toast(TOASTS.sand);
+      } else if (it.kind === 'remnant') {
+        this.levelUp(it);
       } else if (it.kind === 'shard') {
         GAME.data.hourShards[this.worldId] = true;
         GAME.save();
@@ -951,6 +1038,27 @@ export class GameScene extends Phaser.Scene {
   // ------------------------------------------------------------------
   // Win
   // ------------------------------------------------------------------
+  // A Remnant: a level-up. The upgrade is saved and the HUD shows what it does.
+  levelUp(it) {
+    const d = GAME.data;
+    d.remnants.push(`${this.worldId}:${it.id}`);
+    if (it.upgrade) d.upgrades[it.upgrade] = true;
+    GAME.save();
+    const p = this.player;
+    AUDIO.play('levelUp');
+    this.cameras.main.flash(300, 154, 92, 255);
+    if (this.settings.shake) this.cameras.main.shake(260, 0.006);
+    this.abilities.ring(p.x, p.y, 220, 0xc9a8ff, 600, 8);
+    this.abilities.ring(p.x, p.y, 140, 0xe8c372, 480, 5);
+    this.add.particles(p.x, p.y, 'spark', {
+      lifespan: { min: 600, max: 1400 }, speed: { min: 80, max: 340 }, scale: { start: 1.5, end: 0 }, gravityY: -80,
+      tint: [0xffffff, 0xc9a8ff, 0xe8c372], blendMode: 'ADD', emitting: false,
+    }).setDepth(45).explode(60);
+    this.abilities.charge = TUNING.abilities.eclipse.killsToCharge;
+    p.substance = TUNING.player.maxSubstance;
+    bus.emit('levelup', it);
+  }
+
   completeWorld() {
     if (this.ended) return;
     this.ended = true;

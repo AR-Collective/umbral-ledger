@@ -119,6 +119,41 @@ export const TUNING = {
     acolyte: {
       walk: 40, chase: 150, eyeH: 46, grab: 28, killable: true, lantern: null,
     },
+    // The Last Noon: a guardian sworn to the stopped sun. Strikes glance off
+    // its armour; it takes three Black Embers, and an Eclipse staggers it.
+    sunguard: {
+      sprite: 'guardian', walk: 60, chase: 200, eyeH: 128, grab: 38, killable: false, hp: 3, tint: 0xffe2b0,
+      lantern: { radius: 300, intensity: 0.95, spread: 28, glowRadius: 120, glowIntensity: 0.9 },
+    },
+  },
+
+  // ---------------------------------------------------------------
+  // ABILITIES returned by soul fragments (the final world has them all).
+  // ---------------------------------------------------------------
+  abilities: {
+    // Black Ember: a bolt of black flame. Snuffs fires and lamps, burns enemies.
+    ember: { cost: 7, minSubstance: 16, cooldown: 0.45, speed: 760, life: 0.9, damage: 1, radius: 16, splash: 70 },
+    // Echo: a shadow clone that walks on and makes noise. Watchers chase it instead of you.
+    echo: { cooldown: 7, life: 4.5, speed: 120, noise: 320 },
+    // Eclipse: light cannot touch you for a while, and the Corona burst hits everything near.
+    eclipse: { duration: 4.5, radius: 300, radius2: 400, stun: 2.6, killsToCharge: 4, slowmo: 0.35 },
+    // Cling: slide down shaded walls and kick off them.
+    cling: { slide: 110, kickX: 330, kickY: 700, lockTime: 0.2 },
+    // Shadow Dash: the upgraded Shade Step cuts down weak enemies it passes through.
+    dashCut: { width: 34 },
+  },
+
+  // When a world says grabs hurt instead of kill (the Last Noon), this much.
+  grab: { damage: 25, knockback: 420, cooldown: 1.2 },
+
+  // The Sun-Warden, boss of the Last Noon.
+  warden: {
+    cracks: 3,                 // hits on his exposed core to win
+    staggerTime: 6.5,          // how long he kneels once his braziers are out
+    lanceEvery: [2.6, 1.9, 1.4], lanceTell: 0.95, lanceWidth: 70, lanceDamage: 40,
+    sweepEvery: [0, 9, 7], sweepTime: 3.2,
+    summonEvery: [0, 0, 11],
+    relightDelay: 1.5,
   },
 
   wickMother: {
@@ -139,6 +174,9 @@ export const TUNING = {
     playbackSpeed: 2,       // the ghost replay loops this many times faster than real time
     desaturate: 0.85,
   },
+
+  // The Last Noon: a sun stopped overhead, burning through the ash in shafts.
+  noon: { sunIntensity: 0.42, elevation: 78 },   // below burnAt: open ground is Dim (seen, not burned)
 
   dawn: {
     startElevation: 12, endElevation: 45,  // sun angle in degrees during the chase

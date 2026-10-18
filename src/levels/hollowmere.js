@@ -73,16 +73,83 @@ function drawMillWatchers(scene, outcome, instant) {
   }
 }
 
-// Cover props. The occluder boxes match the painted silhouettes, not the canvas.
-function haystack(b, x) { b.prop('haystack', x, G, { occlude: [-62, -78, 124, 78] }); }
+// Cover props. Each casts light and shadow with an outline traced from its
+// painting (relative to the bottom-centre), so a dome makes a dome-shaped
+// shadow, not a box. The occlude box is where it hides you, as before.
+const SHAPE = {
+  haystack: [-71, 0, -66, -46, -48, -76, -24, -90, 3, -94, 32, -88, 56, -68, 68, -42, 71, 0],
+  // the bed and sacks above, the wheels below: you crouch between them
+  cart: [-78, -62, -62, -82, -36, -86, 4, -80, 54, -62, 54, -38, 46, -14, 22, -4, -44, -4, -68, -26],
+  barrel: [-10, 0, -18, -10, -20, -28, -18, -46, -10, -55, 10, -55, 18, -46, 20, -28, 18, -10, 10, 0],
+};
+function haystack(b, x) { b.prop('haystack', x, G, { occlude: [-62, -78, 124, 78], shape: SHAPE.haystack }); }
 // A cart counts as cover down to the ground (you crouch between its wheels).
-function cart(b, x, flip = false) { b.prop('cart', x, G, { occlude: flip ? [-54, -66, 124, 66] : [-70, -66, 124, 66], flip }); }
-function barrel(b, x, y = G) { b.prop('barrel', x, y, { occlude: [-18, -52, 36, 52] }); }
+function cart(b, x, flip = false) { b.prop('cart', x, G, { occlude: flip ? [-54, -66, 124, 66] : [-70, -66, 124, 66], shape: SHAPE.cart, flip }); }
+function barrel(b, x, y = G) { b.prop('barrel', x, y, { occlude: [-18, -52, 36, 52], shape: SHAPE.barrel }); }
 function crate(b, x, y = G, solid = false) { b.prop('crate', x, y, { occlude: [-26, -54, 52, 54], solid }); }
 function tree(b, x, o = {}) { b.decor('tree_big', x, G + 8, { depth: 11, scale: o.scale ?? 1, flip: o.flip, tint: o.tint ?? 0xc8c8dc }); }
 
 // a chimney on a flat roof: a light blocker you can hide behind
 function chimney(b, x, roofY) { b.stack(x, roofY, 34, 60, { depth: 13 }); }
+
+// Chase obstacles. Everything else on the dawn road is cover you run through;
+// these are in your way, so they share one look: drawn in front of the cover
+// props, with a pulsing ember outline above the light layer that stays
+// readable in the deepest shadow. Solid ones stay under the survivors' hop.
+const OBSTACLE = {
+  barricade: { solid: [-56, -52, 112, 52], shape: [-62, 0, -48, -54, 48, -54, 62, 0] },   // a hop
+  wagon: { solid: [-78, -74, 156, 74] },              // a full jump
+  thatch: { solid: null },                            // not solid, but it burns
+};
+function obstacle(b, kind, x) {
+  const s = b.s;
+  const key = `obs_${kind}`;
+  const img = s.add.image(x, G, key).setOrigin(0.5, 1).setDepth(23);
+  const rim = s.add.image(x, G + 3, `${key}_rim`).setOrigin(0.5, 1).setDepth(44).setBlendMode('ADD').setAlpha(0.75);
+  const pulse = s.tweens.add({ targets: rim, alpha: 0.35, duration: 650, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  const ob = { kind, x, img, rim, pulse, halfW: img.width / 2 };
+  const box = OBSTACLE[kind].solid;
+  if (box) {
+    const shape = OBSTACLE[kind].shape;
+    ob.zone = b.solid(x + box[0], G + box[1], box[2], box[3], { visible: false, occlude: !shape });
+    if (shape) s.lighting.addPolyOccluder(shape.map((v, i) => (i % 2 ? G + v : x + v)), 'obstacle');
+    ob.rect = s.solidRects[s.solidRects.length - 1];
+    b.edge(x + box[0], G + box[1], box[2]);
+  } else {
+    // the burn core is a little narrower than a running jump, so a clean jump never burns you
+    b.candle(x, G - 4, { stick: false, radius: 110, intensity: 0.95, flameScale: 1.3, flare: 0.6 });
+    for (const dx of [-38, 36]) {
+      const f = s.add.image(x + dx, G - 14, 'flame').setOrigin(0.5, 0.9).setDepth(42).setBlendMode('ADD').setScale(0.8);
+      s.tweens.add({ targets: f, scaleY: 1.0, scaleX: 0.7, duration: 110 + Math.abs(dx) * 2, yoyo: true, repeat: -1 });
+    }
+    s.add.particles(x, G - 20, 'spark', {
+      x: { min: -54, max: 54 }, lifespan: { min: 700, max: 1400 }, speedY: { min: -120, max: -40 }, speedX: { min: -20, max: 30 },
+      scale: { start: 1.2, end: 0 }, alpha: { start: 1, end: 0 }, tint: [0xfff0c0, 0xffb050, 0xff6a20], blendMode: 'ADD', frequency: 40,
+    }).setDepth(42);
+  }
+  return ob;
+}
+
+// The Wick-Mother does not go around debris: she goes through it.
+function smash(scene, ob) {
+  ob.smashed = true;
+  ob.zone.body.enable = false;
+  const i = scene.solidRects.indexOf(ob.rect);
+  if (i >= 0) scene.solidRects.splice(i, 1);
+  ob.pulse.stop();
+  scene.tweens.add({ targets: ob.rim, alpha: 0, duration: 200 });
+  scene.tweens.add({ targets: ob.img, alpha: 0, y: G + 30, angle: 18, duration: 500, ease: 'Quad.easeIn' });
+  scene.add.particles(ob.x, G - 30, 'smoke', {
+    lifespan: 900, speed: { min: 40, max: 160 }, angle: { min: 200, max: 340 }, scale: { start: 0.5, end: 1.4 },
+    alpha: { start: 0.55, end: 0 }, tint: 0x2a1e16, emitting: false,
+  }).setDepth(43).explode(18);
+  scene.add.particles(ob.x, G - 30, 'ember', {
+    lifespan: { min: 500, max: 1100 }, speed: { min: 120, max: 320 }, angle: { min: 210, max: 330 }, gravityY: 700,
+    scale: { start: 1.1, end: 0.2 }, tint: [0xc99a62, 0x5a4a36], emitting: false,
+  }).setDepth(43).explode(16);
+  AUDIO.play('landHard', scene.spatialFor(ob.x));
+  if (scene.settings.shake) scene.cameras.main.shake(180, 0.004);
+}
 
 // small linear helpers for the dawn grade
 const lerp = (a, b, k) => a + (b - a) * k;
@@ -151,7 +218,7 @@ export default {
     tree(b, 300, { scale: 1.05 });
     b.prop('signpost', 360, G, { depth: 17 });
     b.prop('fence', 460, G, { depth: 17 });
-    b.trigger({ id: 'arrive', x: 40, y: 0, w: 600, h: 1000, lines: ['h_arrive1', 'h_arrive2', 'h_fog_hint'] });
+    b.trigger({ id: 'arrive', x: 40, y: 0, w: 600, h: 1000, lines: ['h_arrive1', 'h_arrive2', 'h_fog_hint', 'h_threads_hint'] });
 
     // A lamp you must pass, with a low wall to Merge behind.
     b.house(560, G, 200, 190, { windows: [[30, 44, false], [140, 44, true]], seed: 1, windowRadius: 150 });
@@ -165,7 +232,7 @@ export default {
     cart(b, 1000);
     barrel(b, 1420);
     b.watcher({ id: 'lm1', type: 'lanternman', x: 1195, y: G, patrol: [1480, 960], wait: 1.6, facing: -1, bounds: [900, 1490], dormant: true });
-    b.trigger({ id: 'firstLM', x: 940, y: 0, w: 50, h: 1000, event: 'firstLanternman', lines: ['h_first_lm1', 'h_first_lm2', 'h_first_lm3'] });
+    b.trigger({ id: 'firstLM', x: 940, y: 0, w: 50, h: 1000, event: 'firstLanternman', lines: ['h_first_lm1', 'h_first_lm2', 'h_first_lm3', 'h_lm_hint'] });
 
     // A flat-roofed house: an escape route upward and the way on. Lanternmen do not climb.
     crate(b, 1465, G, true);
@@ -312,14 +379,18 @@ export default {
       if (kind === 'hay') haystack(b, x);
       else if (kind === 'cart') cart(b, x);
       else if (kind === 'fence') {
-        b.prop('fence', x + 12, G, { depth: 17 });
-        b.solid(x, G - 44, 24, 44, { visible: false });
+        b.prop('fence', x + 12, G, { depth: 17 });     // cover only: anything solid here is an obstacle
       } else if (kind === 'wall') b.stack(x, G, 40, w);
       else if (kind === 'cottage') {
         b.house(x, G, w, h, { seed: 20 + i, windows: [[w * 0.4, 50, false]], windowLights: false, smoke: false });
         b.screen(x, G - h, w, h);
       }
     });
+    // In the gaps between the cover, debris in the road keeps you jumping.
+    this.obstacles = [
+      ['barricade', 7530], ['wagon', 7790], ['thatch', 8210], ['barricade', 8770],
+      ['barricade', 9330], ['wagon', 10040], ['thatch', 10600],
+    ].map(([kind, x]) => obstacle(b, kind, x));
     b.prop('gate_arch', GATE_X, G, { depth: 12 });
     b.light({ x: GATE_X, y: G - 120, radius: 240, intensity: 0.7, color: [150, 190, 255], kind: 'safe' });
     b.trigger({ id: 'gate', x: GATE_X - 30, y: 0, w: 200, h: 1000, event: 'reachGate', requires: 'chase' });
@@ -375,6 +446,11 @@ export default {
       g.fillStyle(0x0c0a0e, 1);
       g.fillCircle(w.cx, w.cy, 9);
       this.wheelOcc.setPolys(polys);
+    }
+
+    const wick = scene.wick;
+    if (wick?.active) {
+      for (const ob of this.obstacles ?? []) if (ob.zone && !ob.smashed && wick.x + 110 > ob.x - ob.halfW) smash(scene, ob);
     }
 
     // Dawn: the sun climbs, shadows shorten, the fog burns away, the sky warms.
@@ -455,7 +531,7 @@ export default {
         sv.setState('flee');
         sv.fleeX = GATE_X + 40 + sv.index * 36;
       }
-      scene.playLines(['h_dawn1', 'h_dawn2', 'h_dawn3', 'h_dawn_whisper', 'h_dawn_hint']);
+      scene.playLines(['h_dawn1', 'h_dawn2', 'h_dawn3', 'h_dawn_hint', 'h_wick_hint', 'h_dawn_whisper']);
     },
 
     reachGate(scene) {

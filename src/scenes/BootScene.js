@@ -16,6 +16,8 @@ import cutFragment from '../assets/cutscenes/fragment.jpg';
 import cutMemory from '../assets/cutscenes/memory.jpg';
 import cutResist from '../assets/cutscenes/resist.jpg';
 import cutAbility from '../assets/cutscenes/ability.jpg';
+import { AUDIO } from '../systems/audio.js';
+import { loadSoundOn } from '../systems/soundToggle.js';
 
 // Painted cutscene panels (2160x1040 2K HD). CutsceneScene uses 'cut_<art>' when
 // it exists and falls back to its code-drawn painter otherwise.
@@ -46,7 +48,9 @@ export class BootScene extends Phaser.Scene {
       if (tex && tex.setFilter) tex.setFilter(Phaser.Textures.FilterMode.LINEAR);
     }
     loadDev();
-    this.registry.set('settings', { muted: false, shake: true, fullHud: false });
+    const soundOn = loadSoundOn();
+    this.registry.set('settings', { muted: !soundOn, shake: true, fullHud: false });
+    AUDIO.setMuted(!soundOn);
     this.registry.set('timeScale', 1);
     const text = this.add.text(640, 360, 'painting shadows...', { fontFamily: 'Georgia, serif', fontSize: '20px', color: '#6f6a82' }).setOrigin(0.5);
 

@@ -136,6 +136,9 @@ export class Watcher {
     this.id = def.id ?? `w${Math.round(def.x)}`;
     this.type = def.type ?? 'lanternman';
     this.cfg = TUNING.enemies[this.type];
+    this.key = this.cfg.sprite ?? this.type;      // which painted sheet (a Sunguard wears the guardian's)
+    this.hp = def.hp ?? this.cfg.hp ?? 1;
+    this.stunT = 0;
     this.groundY = def.y;
     this.s = makeWatcherState(def);
     if (def.patrol && def.patrol.length === 1) this.s.homeFacing = def.facing ?? 1;
@@ -148,9 +151,14 @@ export class Watcher {
     this.swingA = 0;
     this.swingV = 0;
 
-    const [ox, oy] = feetOrigin(this.type);
-    this.sprite = scene.add.sprite(this.s.x, this.groundY, this.type, 0).setOrigin(ox, oy).setDepth(36);
-    this.sprite.play(`${this.type}_idle`);
+    const [ox, oy] = feetOrigin(this.key);
+    this.sprite = scene.add.sprite(this.s.x, this.groundY, this.key, 0).setOrigin(ox, oy).setDepth(36);
+    this.sprite.play(`${this.key}_idle`);
+    if (this.cfg.tint) this.sprite.setTint(this.cfg.tint);
+    // A Sunguard's halo: the stopped sun, worn like a crown.
+    if (this.type === 'sunguard') {
+      this.halo = scene.add.image(0, 0, 'halo_ring').setDepth(37).setBlendMode('ADD').setScale(0.55).setAlpha(0.9);
+    }
     this.icon = scene.add.text(0, 0, '', {
       fontFamily: 'Cinzel, Georgia, serif', fontSize: '28px', fontStyle: 'bold', color: '#ffcc66',
       stroke: '#000000', strokeThickness: 5,
@@ -178,7 +186,7 @@ export class Watcher {
 
   anchor() {
     const f = this.sprite.frame ? Number(this.sprite.frame.name) : 0;
-    return anchorFor(this.type, Number.isFinite(f) ? f : 0);
+    return anchorFor(this.key, Number.isFinite(f) ? f : 0);
   }
   eyeX() { const a = this.anchor(); return this.s.x + a.eye.x * this.s.facing; }
   eyeY() { const a = this.anchor(); return this.groundY + a.eye.y; }
@@ -197,6 +205,7 @@ export class Watcher {
     this.lanternGlow?.setVisible(on);
     if (this.coneLight) this.coneLight.enabled = on;
     if (this.glowLight) this.glowLight.enabled = on;
+    this.halo?.setVisible(on);
   }
 
   wake({ x, facing } = {}) {
@@ -288,7 +297,7 @@ export class Watcher {
   perceive(dt, targets) {
     const S = TUNING.stealth;
     const s = this.s;
-    if (s.mode === 'down' || s.mode === 'dormant') return;
+    if (s.mode === 'down' || s.mode === 'dormant' || s.mode === 'stunned') return;
     this.doubleTakeT -= dt;
     let best = null, bestMeter = -1, seenTarget = null;
     for (const t of targets) {
@@ -338,6 +347,33 @@ export class Watcher {
     }
   }
 
+  // --------------------------- damage ---------------------------
+  // Black Ember, the Shadow Dash and the Corona hurt watchers directly, alert or
+  // not. Returns true if the hit put him down.
+  hurt(damage, fromX) {
+    const s = this.s;
+    if (s.mode === 'down' || s.mode === 'dormant') return false;
+    this.hp -= damage;
+    this.sprite.setTintFill(0xffffff);
+    this.scene.time.delayedCall(90, () => { this.sprite.clearTint(); if (this.cfg.tint) this.sprite.setTint(this.cfg.tint); });
+    if (this.hp <= 0) { this.takeDown(); return true; }
+    const dir = Math.sign(s.x - fromX) || 1;
+    s.x = Math.max(s.minX, Math.min(s.maxX, s.x + dir * 18));
+    if (s.mode !== 'stunned') this.becomeAlert({ id: 'player', x: fromX });
+    return false;
+  }
+
+  // Knocked senseless (the Corona): no sight, no movement for a while.
+  // quiet: no '*' over his head (an ambusher rising from hiding, not a dazed one)
+  stun(seconds, quiet = false) {
+    if (this.s.mode === 'down' || this.s.mode === 'dormant') return;
+    this.s.mode = 'stunned';
+    this.stunT = seconds;
+    this.stunQuiet = quiet;
+    this.icon.setText('');
+    this.meterGfx.clear();
+  }
+
   // --------------------------- takedowns ---------------------------
   canBeTakenDown() {
     return this.cfg.killable && this.s.mode !== 'down' && this.s.mode !== 'alert' && this.s.mode !== 'dormant';
@@ -354,9 +390,10 @@ export class Watcher {
     if (this.lanternGlow) this.lanternGlow.setVisible(false);
     this.icon.setText('');
     this.meterGfx.clear();
-    const hasDown = this.scene.anims.exists(`${this.type}_down`);
+    this.halo?.setVisible(false);
+    const hasDown = this.scene.anims.exists(`${this.key}_down`);
     const doDown = () => {
-      if (hasDown) this.sprite.play(`${this.type}_down`);
+      if (hasDown) this.sprite.play(`${this.key}_down`);
       else this.sprite.setAngle(-this.s.facing * 84);
     };
     if (instant) doDown();
@@ -381,6 +418,15 @@ export class Watcher {
 
   // --------------------------- per frame ---------------------------
   step(dt) {
+    if (this.s.mode === 'stunned') {
+      this.stunT -= dt;
+      if (this.stunT <= 0) {
+        if (this.stunQuiet) this.becomeAlert({ id: 'player', x: this.scene.player.x }, true);
+        else { this.s.mode = 'search'; this.s.searchT = 0; this.s.lastX = this.scene.player.x; }
+      }
+      this.updateLights();
+      return;
+    }
     const before = this.s.mode;
     const prevX = this.s.x;
     stepWatcherState(this.s, this.cfg, dt);
@@ -410,13 +456,18 @@ export class Watcher {
     if (s.mode === 'down' || s.mode === 'dormant') { this.meterGfx.clear(); this.icon.setText(''); return; }
     // animation from mode and movement
     let anim = 'idle';
-    if (s.mode === 'alert') anim = this.scene.anims.exists(`${this.type}_run`) ? 'run' : 'walk';
+    if (s.mode === 'alert') anim = this.scene.anims.exists(`${this.key}_run`) ? 'run' : 'walk';
     else if (s.moving) anim = 'walk';
-    else if ((s.mode === 'suspicious' || s.mode === 'search') && this.scene.anims.exists(`${this.type}_look`)) anim = 'look';
-    const key = `${this.type}_${anim}`;
+    else if ((s.mode === 'suspicious' || s.mode === 'search' || s.mode === 'stunned') && this.scene.anims.exists(`${this.key}_look`)) anim = 'look';
+    const key = `${this.key}_${anim}`;
     if (this.scene.anims.exists(key)) this.sprite.anims.play(key, true);
     this.sprite.anims.timeScale = s.mode === 'search' && anim === 'walk' ? 1.4 : 1;
     this.sprite.setPosition(s.x, this.groundY).setFlipX(s.facing < 0);
+    if (this.halo) {
+      const a = this.anchor();
+      this.halo.setPosition(s.x + a.head.x * s.facing - s.facing * 4, this.groundY + a.head.y - 6).setRotation(this.time * 0.6)
+        .setAlpha(s.mode === 'stunned' ? 0.35 : 0.85 + Math.sin(this.time * 5) * 0.1);
+    }
 
     if (this.lanternSprite) {
       const [lx, ly] = this.lanternPos();
@@ -429,7 +480,8 @@ export class Watcher {
     // State icon and meter: the readable half of the stealth rules.
     const iconY = this.groundY - this.cfg.eyeH - 34;
     this.icon.setPosition(s.x, iconY);
-    if (s.mode === 'alert') this.icon.setText('!').setColor('#ff5a4a');
+    if (s.mode === 'stunned') this.icon.setText(this.stunQuiet ? '!' : '*').setColor(this.stunQuiet ? '#ff5a4a' : '#cfc6ff');
+    else if (s.mode === 'alert') this.icon.setText('!').setColor('#ff5a4a');
     else if (s.mode === 'suspicious') this.icon.setText('?').setColor('#ffcc66');
     else if (s.mode === 'search') this.icon.setText('?').setColor('#c9b8a6');
     else this.icon.setText('');
@@ -449,7 +501,7 @@ export class Watcher {
   }
 
   destroy() {
-    this.sprite.destroy(); this.icon.destroy(); this.meterGfx.destroy();
+    this.sprite.destroy(); this.icon.destroy(); this.meterGfx.destroy(); this.halo?.destroy();
     this.lanternSprite?.destroy(); this.lanternGlow?.destroy();
     if (this.coneLight) this.scene.lighting.removeLight(this.coneLight);
     if (this.glowLight) this.scene.lighting.removeLight(this.glowLight);

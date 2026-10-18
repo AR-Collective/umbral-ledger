@@ -28,6 +28,9 @@ export function freshState(seed = newSeed()) {
     sand: 0,
     sandMax: 0,              // grows as the Prologue hands you Sand; full from World 1 on
     fragments: 0,            // also the light resistance level
+    abilities: [],           // returned with fragments: cling, echo, ember, eclipse, dashCut
+    upgrades: {},            // Remnant level-ups: upgrade id -> true
+    remnants: [],            // Remnant pickups already taken (world:id)
     hourShards: {},          // world id -> true
     branches: {},            // branch id -> { choice, outcome, odds, attempt }
     badLuck: 0,
@@ -97,6 +100,23 @@ class GameState {
     if (worldId !== 'prologue') d.sandMax = Math.max(d.sandMax, TUNING.sand.max);
     this.save();
   }
+
+  // The final world can be played on its own (from Chapters on the title).
+  // It starts you as you would arrive: six fragments home, their powers with them.
+  setupFinalWorld() {
+    this.data = freshState();
+    const d = this.data;
+    d.fragments = 6;
+    d.abilities = ['cling', 'echo', 'ember', 'dashCut'];   // Eclipse awakens during the world itself
+    d.hourShards = { hollowmere: true };
+    d.sandMax = TUNING.sand.max;
+    d.sand = d.sandMax;
+    d.ledger = ['closing'];
+    d.codex = ['Ambush', 'Drop Kill'];
+    this.enterWorld('lastnoon');
+  }
+
+  hasAbility(id) { return this.data.abilities.includes(id); }
 
   // ---------- flags ----------
   flag(name) { return this.data.flags[name]; }

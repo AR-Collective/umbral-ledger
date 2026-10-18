@@ -12,6 +12,8 @@
 import { canvasTex, radial, vgrad } from './art/paint.js';
 import { buildCharacters } from './art/characters.js';
 import { buildScenery } from './art/scenery.js';
+import { buildPowerTextures } from './art/powers.js';
+import { buildWardenTextures } from './art/chars/warden.js';
 
 export const PALETTE = {
   violet: '#9a6bff',
@@ -167,4 +169,6 @@ export function generateTextures(scene) {
 
   buildCharacters(scene);
   buildScenery(scene);
+  buildPowerTextures(scene);
+  buildWardenTextures(scene);
 }

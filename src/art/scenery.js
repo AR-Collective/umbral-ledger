@@ -12,7 +12,7 @@
 
 import {
   makeCanvas, makeNoise, fbm, rand, vgrad, radial, rgba, mix, hex, blob, curve, limb,
-  rimLight, shadeBottom, grain, mottle, addCanvasTexture,
+  rimLight, shadeBottom, grain, mottle, addCanvasTexture, outline,
 } from './paint.js';
 
 const TAU = Math.PI * 2;
@@ -38,6 +38,8 @@ export function paintSky(stops, h = 720) {
 export const SKY_NIGHT = [[0, '#060a1a'], [0.32, '#101a3c'], [0.56, '#23285a'], [0.74, '#433762'], [0.88, '#7c5260'], [1, '#b8744e']];
 export const SKY_DAWN = [[0, '#2f4f8c'], [0.35, '#7d7fae'], [0.6, '#d99a86'], [0.82, '#ffc684'], [1, '#fff0c4']];
 export const SKY_HALL = [[0, '#07060d'], [0.5, '#120f1d'], [1, '#1d1828']];
+// The Last Noon: ash overhead, the stopped sun burning through it, fire on the horizon.
+export const SKY_NOON = [[0, '#120404'], [0.25, '#2e0907'], [0.5, '#5e150b'], [0.72, '#a3310f'], [0.88, '#e0631c'], [1, '#ffa548']];
 
 export function paintStars(w = 1024, h = 380, seed = 7) {
   const c = makeCanvas(w, h);
@@ -701,6 +703,109 @@ export function paintFence() {
   return c;
 }
 
+// ---------------------------------------------------------------
+// Chase obstacles (the dawn road). Fresh-split timber with pale cut ends, so
+// they read as debris thrown into the road, not as scenery behind it.
+// ---------------------------------------------------------------
+const WOOD = '#241811', WOOD_DK = '#120c08', CUT = '#c99a62';
+
+// Sharpened stakes lashed to a log: 124 x 60, solid up to about 54 px.
+export function paintBarricade() {
+  const c = makeCanvas(124, 60);
+  const ctx = c.getContext('2d');
+  const r = rand(31);
+  ctx.fillStyle = WOOD;
+  for (let i = 0; i < 4; i++) {
+    const x = 16 + i * 30;
+    for (const lean of [-0.42, 0.42]) {
+      ctx.save(); ctx.translate(x, 58); ctx.rotate(lean + (r() - 0.5) * 0.08);
+      ctx.beginPath(); ctx.moveTo(-4, 0); ctx.lineTo(-4, -50); ctx.lineTo(0, -60); ctx.lineTo(4, -50); ctx.lineTo(4, 0); ctx.fill();
+      ctx.fillStyle = CUT; ctx.beginPath(); ctx.moveTo(-3, -50); ctx.lineTo(0, -58); ctx.lineTo(3, -50); ctx.fill();
+      ctx.fillStyle = WOOD;
+      ctx.restore();
+    }
+  }
+  // the cross log and its rope lashings
+  ctx.fillStyle = '#2c1e15'; ctx.fillRect(2, 30, 120, 11);
+  ctx.fillStyle = CUT; ctx.beginPath(); ctx.ellipse(3, 35.5, 3, 5.5, 0, 0, TAU); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(121, 35.5, 3, 5.5, 0, 0, TAU); ctx.fill();
+  ctx.fillStyle = '#5a4a36';
+  for (let i = 0; i < 4; i++) ctx.fillRect(14 + i * 30, 29, 4, 13);
+  grain(ctx, 0, 0, 124, 60, 0.08, 6);
+  rimLight(c, '#9fb4ff', 0.45, 1, 2, 0.6);
+  return c;
+}
+
+// A cart tipped on its side across the road: 168 x 92, solid up to about 76 px.
+export function paintWagon() {
+  const c = makeCanvas(168, 92);
+  const ctx = c.getContext('2d');
+  // the bed, on its side, planks running across
+  ctx.fillStyle = WOOD;
+  ctx.save(); ctx.translate(84, 92); ctx.rotate(-0.04);
+  ctx.fillRect(-80, -74, 156, 74);
+  ctx.fillStyle = WOOD_DK;
+  for (let y = -74; y < 0; y += 15) ctx.fillRect(-80, y, 156, 2);
+  ctx.strokeStyle = '#33241a'; ctx.lineWidth = 5; ctx.strokeRect(-77, -71, 150, 68);
+  ctx.beginPath(); ctx.moveTo(-74, -4); ctx.lineTo(70, -68); ctx.stroke();
+  ctx.restore();
+  // a wheel sticking up off the top, and the broken shaft
+  ctx.strokeStyle = '#140e0b'; ctx.lineWidth = 5;
+  ctx.beginPath(); ctx.arc(126, 20, 18, Math.PI * 0.95, Math.PI * 2.05); ctx.stroke();
+  ctx.lineWidth = 2.5;
+  for (let k = 0; k < 5; k++) {
+    const a = Math.PI + (k * Math.PI) / 4;
+    ctx.beginPath(); ctx.moveTo(126, 20); ctx.lineTo(126 + Math.cos(a) * 17, 20 + Math.sin(a) * 17); ctx.stroke();
+  }
+  ctx.fillStyle = '#2c1e15';
+  ctx.save(); ctx.translate(16, 30); ctx.rotate(-0.5); ctx.fillRect(-26, -3, 30, 6); ctx.restore();
+  ctx.fillStyle = CUT; ctx.beginPath(); ctx.ellipse(3, 44, 3, 3.5, -0.5, 0, TAU); ctx.fill();
+  grain(ctx, 0, 0, 168, 92, 0.08, 8);
+  rimLight(c, '#9fb4ff', 0.45, 1, 2, 0.7);
+  return c;
+}
+
+// A heap of thatch and charred beams fallen from a roof: 132 x 36. It burns.
+export function paintThatch() {
+  const c = makeCanvas(132, 36);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = vgrad(ctx, 0, 36, [[0, '#3a2a14'], [1, '#120a06']]);
+  blob(ctx, [[2, 36], [12, 18], [40, 8], [74, 4], [108, 10], [128, 22], [130, 36]], 0.55); ctx.fill();
+  const r = rand(17);
+  ctx.strokeStyle = 'rgba(200,150,70,0.35)'; ctx.lineWidth = 1;
+  for (let i = 0; i < 120; i++) {
+    const x = 10 + r() * 112, y = 10 + r() * 22;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + (r() - 0.5) * 16, y + 2 + r() * 6); ctx.stroke();
+  }
+  // charred beams with glowing cracks
+  ctx.fillStyle = '#0c0705';
+  ctx.save(); ctx.translate(30, 22); ctx.rotate(-0.25); ctx.fillRect(-22, -4, 60, 8); ctx.restore();
+  ctx.save(); ctx.translate(92, 20); ctx.rotate(0.3); ctx.fillRect(-26, -4, 52, 8); ctx.restore();
+  ctx.fillStyle = '#ff8a30';
+  for (let i = 0; i < 26; i++) ctx.fillRect(12 + r() * 108, 14 + r() * 18, 1.5 + r() * 2, 1);
+  return c;
+}
+
+// An iron fire-bowl on a tripod: the Last Noon's braziers. Black Ember snuffs them.
+export function paintBrazier() {
+  const c = makeCanvas(70, 116);
+  const ctx = c.getContext('2d');
+  const IRON = '#120d10';
+  ctx.strokeStyle = IRON; ctx.lineWidth = 6; ctx.lineCap = 'round';
+  for (const [x0, x1] of [[10, 30], [60, 40], [35, 35]]) { ctx.beginPath(); ctx.moveTo(x0, 114); ctx.lineTo(x1, 40); ctx.stroke(); }
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(16, 84); ctx.lineTo(54, 84); ctx.stroke();
+  ctx.fillStyle = IRON;
+  ctx.beginPath(); ctx.moveTo(4, 22); ctx.lineTo(66, 22); ctx.lineTo(56, 44); ctx.lineTo(14, 44); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#c9a24a';
+  for (let x = 10; x < 62; x += 9) ctx.fillRect(x, 26, 3, 3);
+  // coals, glowing inside the lip
+  ctx.fillStyle = vgrad(ctx, 14, 24, [[0, '#ffd27a'], [1, '#c2401a']]);
+  ctx.beginPath(); ctx.ellipse(35, 22, 28, 5, 0, 0, TAU); ctx.fill();
+  rimLight(c, '#ffb070', 0.5, -1, 2, 0.7);
+  return c;
+}
+
 export function paintSignpost() {
   const c = makeCanvas(100, 130);
   const ctx = c.getContext('2d');
@@ -1039,6 +1144,12 @@ export function buildScenery(scene) {
   add('cart', paintCart());
   add('haystack', paintHaystack());
   add('fence', paintFence());
+  // chase obstacles, each with an ember outline that marks it as something in your way
+  for (const [key, paint] of [['obs_barricade', paintBarricade], ['obs_wagon', paintWagon], ['obs_thatch', paintThatch]]) {
+    const art = paint();
+    add(key, art);
+    add(`${key}_rim`, outline(art, '#ffb062', 3));
+  }
   add('signpost', paintSignpost());
   add('well', paintWell());
   add('lampframe', paintLampFrame());
@@ -1055,6 +1166,14 @@ export function buildScenery(scene) {
   add('hourglass', paintHourglass());
   add('candelabra', paintCandelabra());
   add('pillar_fg', paintPillar(90, 980));
+  // ---- the Last Noon ----
+  add('brazier', paintBrazier());
+  add('sky_noon', paintSky(SKY_NOON));
+  add('noon_ash_a', paintClouds(1024, 300, { seed: 31, color: '#1a0605', light: '#9a3414', cover: 0.62, band: [0.1, 0.65] }));
+  add('noon_ash_b', paintClouds(1024, 240, { seed: 37, color: '#120404', light: '#6a1e0c', cover: 0.5, band: [0.25, 0.8] }));
+  add('noon_ridge', paintRidge(2048, 330, { seed: 51, top: 0.45, amp: 0.24, cells: 5, color: '#2a0806', fog: '#ff7a3a', fogAlpha: 0.55 }));
+  add('noon_skyline_far', paintSkyline(2048, 360, { seed: 55, color: '#1e0605', fog: '#ff6a2a', fogAlpha: 0.55, scale: 0.9, windowChance: 0.4 }));
+  add('noon_skyline_near', paintSkyline(2048, 420, { seed: 59, color: '#110303', fog: '#d8461a', fogAlpha: 0.4, scale: 1.35, windowChance: 0.3, mill: false }));
 }
 
 // Dev preview page

@@ -48,9 +48,13 @@ export class LevelBuilder {
     if (o.visible !== false) {
       const style = o.style ?? 'stone';
       const depth = o.depth ?? 20;
-      s.add.tileSprite(x, y, w, h, BODY[style] ?? 'stone_body').setOrigin(0).setDepth(depth);
+      const body = s.add.tileSprite(x, y, w, h, BODY[style] ?? 'stone_body').setOrigin(0).setDepth(depth);
+      if (o.tint) body.setTint(o.tint);
       const top = o.top === undefined ? TOP[style] : o.top ? `top_${o.top}` : null;
-      if (top && o.trim !== false) s.add.tileSprite(x, y - 6, w, 44, top).setOrigin(0).setDepth(depth + 0.2);
+      if (top && o.trim !== false) {
+        const trim = s.add.tileSprite(x, y - 6, w, 44, top).setOrigin(0).setDepth(depth + 0.2);
+        if (o.tint) trim.setTint(o.tint);
+      }
       else if (o.trim !== false) s.add.rectangle(x, y, w, 2, 0x9fb4ff, 0.25).setOrigin(0).setDepth(depth + 0.2);
     }
     if (o.edge !== false && o.visible !== false) this.edge(x, y, w);
@@ -106,7 +110,13 @@ export class LevelBuilder {
     let rect = null;
     if (o.occlude === true) rect = [x - img.displayWidth / 2, feetY - img.displayHeight, img.displayWidth, img.displayHeight];
     else if (Array.isArray(o.occlude)) rect = [x + o.occlude[0], feetY + o.occlude[1], o.occlude[2], o.occlude[3]];
-    if (rect) s.lighting.addRectOccluder(rect[0], rect[1], rect[2], rect[3], 'prop', { cover: o.cover ?? true });
+    // shape: a convex outline [dx0, dy0, dx1, dy1, ...] relative to the bottom-centre,
+    // for props whose silhouette is not a box (it replaces the occlude rectangle).
+    if (o.shape) {
+      const pts = o.shape.map((v, i) => (i % 2 ? feetY + v : x + (o.flip ? -v : v)));
+      const coverBox = rect ? { x: rect[0], y: rect[1], w: rect[2], h: rect[3] } : undefined;
+      s.lighting.addPolyOccluder(pts, 'prop', { cover: o.cover ?? true, coverBox });
+    } else if (rect) s.lighting.addRectOccluder(rect[0], rect[1], rect[2], rect[3], 'prop', { cover: o.cover ?? true });
     if (o.solid) {
       const r = rect ?? [x - img.displayWidth / 2, feetY - img.displayHeight, img.displayWidth, img.displayHeight];
       this.solid(r[0], r[1], r[2], r[3], { visible: false, occlude: false });
@@ -215,6 +225,65 @@ export class LevelBuilder {
     s.tweens.add({ targets: flame, scaleY: (o.flameScale ?? 0.7) * 1.2, scaleX: (o.flameScale ?? 0.7) * 0.88, duration: 120 + Math.random() * 80, yoyo: true, repeat: -1 });
     this.flare(x, y - 30, 0xff9a40, o.flare ?? 0.35, 0.8);
     return this.light({ x, y: y - 28, radius: o.radius ?? 140, intensity: o.intensity ?? 0.9, color: [255, 142, 62], flicker: 0.14, fire: (o.kind ?? 'burn') === 'burn', kind: o.kind ?? 'burn' });
+  }
+
+  // A brazier: a big open fire on a tripod. It burns, and Black Ember can snuff it.
+  // Returns the snuffable record (level scripts watch it: o.onSnuff).
+  brazier(x, groundY, o = {}) {
+    const s = this.s;
+    this.prop('brazier', x, groundY, { depth: o.depth ?? 17 });
+    const fy = groundY - 96;
+    const flames = [-14, 2, 16].map((dx, i) => {
+      const f = s.add.image(x + dx, fy, 'flame').setOrigin(0.5, 0.9).setDepth(42).setBlendMode('ADD').setScale(i === 1 ? 1.25 : 0.85);
+      s.tweens.add({ targets: f, scaleY: f.scaleY * 1.25, scaleX: f.scaleX * 0.85, duration: 110 + i * 37, yoyo: true, repeat: -1 });
+      return f;
+    });
+    const flare = this.flare(x, fy - 20, 0xff9a40, 0.9, 0.85);
+    const embers = s.add.particles(x, fy - 10, 'spark', {
+      x: { min: -18, max: 18 }, lifespan: { min: 600, max: 1300 }, speedY: { min: -110, max: -40 }, speedX: { min: -16, max: 16 },
+      scale: { start: 1, end: 0 }, alpha: { start: 1, end: 0 }, tint: [0xfff0c0, 0xffb050, 0xff6a20], blendMode: 'ADD', frequency: 60,
+    }).setDepth(42);
+    const light = this.light({ x, y: fy - 26, radius: o.radius ?? 230, intensity: 0.95, color: [255, 142, 62], flicker: 0.12, fire: true, kind: 'burn' });
+    // the whole brazier is the target: a bolt thrown from the ground still puts it out
+    const sn = { x, y: groundY - 60, r: 58, light, sprites: [...flames, flare], lit: true, burn: true, onSnuff: o.onSnuff };
+    const off = sn.onSnuff;
+    sn.onSnuff = (v) => { embers.stop(); off?.(v); };
+    sn.relight = () => {
+      sn.lit = true; light.enabled = true; embers.start();
+      for (const f of flames) { f.setAlpha(1); f.setScale(f === flames[1] ? 1.25 : 0.85); }
+      flare.setAlpha(0.85).setScale(0.9);
+    };
+    s.snuffables.push(sn);
+    return sn;
+  }
+
+  // A shaft of the stopped sun burning down through the ash. It burns like any light.
+  sunshaft(x, o = {}) {
+    const s = this.s;
+    const top = o.top ?? 0, len = o.length ?? 820;
+    const L = this.light({ x, y: top, radius: len, intensity: o.intensity ?? 0.95, color: [255, 226, 176], cone: { dir: 90 + (o.lean ?? 0), spread: o.spread ?? 6 }, kind: 'beam' });
+    s.add.particles(x, top + len * 0.5, 'spark', {
+      lifespan: 4200, speedX: { min: -5, max: 5 }, speedY: { min: 6, max: 22 }, scale: { min: 0.2, max: 0.55 },
+      alpha: { onEmit: () => 0, onUpdate: (pp, k, t) => Math.sin(t * Math.PI) * 0.8 }, tint: [0xfff1c0, 0xffc070], blendMode: 'ADD', frequency: 180,
+      emitZone: { type: 'random', source: new Phaser.Geom.Rectangle(-30, -len * 0.45, 60, len * 0.9) },
+    }).setDepth(26);
+    return L;
+  }
+
+  // A Remnant: a splinter of the man's soul. Taking one is a level-up (o.upgrade).
+  remnant(def) {
+    const s = this.s;
+    if (GAME.data.remnants.includes(`${s.worldId}:${def.id}`)) return null;
+    const img = s.add.image(def.x, def.y, 'remnant').setDepth(44);
+    const glow = this.flare(def.x, def.y, 0x9a5cff, 0.9, 0.7, 44);
+    s.tweens.add({ targets: [img], y: def.y - 10, duration: 1300, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    s.tweens.add({ targets: [glow], alpha: 0.3, duration: 800, yoyo: true, repeat: -1 });
+    s.add.particles(def.x, def.y, 'spark', {
+      lifespan: 1600, speed: { min: 6, max: 24 }, scale: { start: 0.7, end: 0 }, tint: [0xc9a8ff, 0xe8c372], blendMode: 'ADD', frequency: 90,
+    }).setDepth(44);
+    const item = { ...def, img, glow, kind: 'remnant' };
+    s.pickups.push(item);
+    return item;
   }
 
   // A standing candelabra with three flames.

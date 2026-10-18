@@ -59,6 +59,8 @@ class AudioEngine {
 
     this.buildContinuous();
     if (this.pendingAmbience) this.setAmbience(this.pendingAmbience);
+    this.nextNature = {};
+    setInterval(() => this.nature(), 100);
   }
 
   impulse(seconds, decay) {
@@ -233,6 +235,13 @@ class AudioEngine {
     } else if (kind === 'title') {
       drone([55, 82.4, 110], 'sine', 0.06, 380);
       wind(0.02, 260);
+    } else if (kind === 'noon') {
+      // a world on fire: a hot low wind and a choir of heat
+      drone([61.7, 92.5, 123.5], 'sawtooth', 0.025, 300);
+      wind(0.06, 520);
+    } else if (kind === 'boss') {
+      drone([46.2, 69.3, 92.5, 138.6], 'sawtooth', 0.035, 420);
+      wind(0.05, 700);
     }
     this.amb = { gain, nodes };
   }
@@ -270,11 +279,80 @@ class AudioEngine {
     }
     // Sparse music: a soft note every few seconds. Silence is part of the score.
     if (this.ambienceKind && this.ambienceKind !== 'title' && t >= this.nextNote) {
-      const scale = this.ambienceKind === 'hall' ? [146.8, 174.6, 220, 261.6, 293.7] : [130.8, 155.6, 174.6, 196, 233.1, 261.6];
+      const scale = this.ambienceKind === 'hall' ? [146.8, 174.6, 220, 261.6, 293.7]
+        : this.ambienceKind === 'noon' || this.ambienceKind === 'boss' ? [123.5, 130.8, 164.8, 185, 196, 246.9] : [130.8, 155.6, 174.6, 196, 233.1, 261.6];
       const f = scale[Math.floor(Math.random() * scale.length)];
       this.tone('triangle', f, t, 0.8, 0.035, 3.5, this.out((Math.random() - 0.5) * 0.6, 0.9));
       this.nextNote = t + 4 + Math.random() * 6;
     }
+  }
+
+  // ---------------- nature ----------------
+  // Small living sounds scattered over the drone, scheduled on their own clock so
+  // they also play on the title and in cutscenes: crickets, an owl and leaves at
+  // night, birds at dawn, water dripping in the Hall.
+  nature() {
+    if (!this.ctx || this.muted || this.ctx.state !== 'running') return;
+    const t = this.ctx.currentTime;
+    const n = this.nextNature;
+    const kind = this.ambienceKind;
+    const due = (name, min, max) => {
+      if (n[name] === undefined) n[name] = t + Math.random() * max;
+      if (t < n[name]) return false;
+      n[name] = t + min + Math.random() * (max - min);
+      return true;
+    };
+    const pan = () => (Math.random() - 0.5) * 1.4;
+    if (kind === 'night' || kind === 'title') {
+      if (due('cricket', 0.35, 1.3)) this.cricket(t, pan());
+      if (due('owl', kind === 'title' ? 24 : 14, kind === 'title' ? 45 : 30)) this.owl(t + 0.05, pan());
+      if (due('rustle', 5, 11)) this.rustle(t, pan());
+    } else if (kind === 'dawn') {
+      if (due('bird', 1.2, 3.8)) this.birdsong(t, pan());
+      if (due('cricket', 2.5, 6)) this.cricket(t, pan(), 0.5);
+      if (due('rustle', 4, 9)) this.rustle(t, pan());
+    } else if (kind === 'hall') {
+      if (due('drip', 2, 6)) this.drip(t, pan());
+    } else if (kind === 'noon' || kind === 'boss') {
+      if (due('crackle', 0.08, 0.5)) this.burst(t, { type: 'bandpass', freq: 1500 + Math.random() * 3000, q: 3, peak: 0.02 + Math.random() * 0.03, decay: 0.03, dest: this.out(pan(), 0.2) });
+      if (due('collapse', 9, 20)) {
+        this.burst(t, { type: 'lowpass', freq: 300, attack: 0.05, peak: 0.12, decay: 1.6, dest: this.out(pan(), 0.9) });
+        this.tone('sine', 50, t, 0.05, 0.08, 1.4, this.out(0, 0.6), 35);
+      }
+      if (due('rustle', 4, 8)) this.rustle(t, pan());
+    }
+  }
+
+  cricket(t, pan, level = 1) {
+    const f = 4300 + Math.random() * 700;
+    const dest = this.out(pan, 0.12);
+    const pulses = 3 + Math.floor(Math.random() * 2);
+    for (let i = 0; i < pulses; i++) this.tone('sine', f, t + i * 0.055, 0.004, 0.014 * level, 0.03, dest);
+  }
+
+  owl(t, pan) {
+    const dest = this.out(pan, 0.7);
+    this.tone('sine', 372, t, 0.09, 0.05, 0.5, dest, 330);
+    this.tone('sine', 356, t + 0.8, 0.05, 0.035, 0.22, dest, 320);
+    this.tone('sine', 352, t + 1.1, 0.06, 0.045, 0.55, dest, 300);
+  }
+
+  rustle(t, pan) {
+    this.burst(t, { type: 'bandpass', freq: 3200, q: 0.6, attack: 0.7, peak: 0.022, decay: 1.6, sweepTo: 1700, dest: this.out(pan, 0.2) });
+  }
+
+  birdsong(t, pan) {
+    const dest = this.out(pan, 0.35);
+    const notes = 3 + Math.floor(Math.random() * 4);
+    const base = 2600 + Math.random() * 1200;
+    for (let i = 0; i < notes; i++) {
+      const f = base * (0.85 + Math.random() * 0.4);
+      this.tone('sine', f, t + i * (0.09 + Math.random() * 0.05), 0.006, 0.026, 0.07, dest, f * (Math.random() < 0.5 ? 1.35 : 0.75));
+    }
+  }
+
+  drip(t, pan) {
+    this.tone('sine', 1300 + Math.random() * 500, t, 0.002, 0.035, 0.14, this.out(pan, 0.9), 650);
   }
 
   heartbeat(t, level) {
@@ -441,6 +519,79 @@ class AudioEngine {
       case 'interact':
         this.burst(t, { type: 'bandpass', freq: 900, q: 2, peak: 0.08, decay: 0.12, dest: this.out(pan, 0.3) });
         break;
+      // ---- the final world's powers ----
+      case 'ember': {
+        // a dark whoosh: fire sucked inward
+        const d = this.out(pan, 0.35);
+        this.burst(t, { type: 'bandpass', freq: 2400, q: 0.8, attack: 0.01, peak: 0.16 * v, decay: 0.28, dest: d, sweepTo: 300 });
+        this.tone('sawtooth', 140, t, 0.01, 0.06 * v, 0.3, d, 60);
+        break;
+      }
+      case 'emberHit':
+        this.burst(t, { type: 'lowpass', freq: 900, peak: 0.25 * v, decay: 0.3, dest: this.out(pan, 0.4) });
+        this.burst(t, { type: 'bandpass', freq: 3800, q: 1, peak: 0.06 * v, decay: 0.18, dest: this.out(pan, 0.2) });
+        break;
+      case 'snuff':
+        // a flame choked out: a hiss falling to nothing
+        this.burst(t, { type: 'highpass', freq: 2200, attack: 0.01, peak: 0.12 * v, decay: 0.7, dest: this.out(pan, 0.5), sweepTo: 600 });
+        this.tone('sine', 220, t, 0.01, 0.05 * v, 0.5, this.out(pan, 0.6), 80);
+        break;
+      case 'echo': {
+        const d = this.out(pan, 0.9);
+        [392, 523.3, 784].forEach((f, i) => this.tone('triangle', f, t + i * 0.05, 0.01, 0.05 * v, 0.6, d));
+        break;
+      }
+      case 'echoPop':
+        this.tone('sine', 880, t, 0.005, 0.06 * v, 0.25, this.out(pan, 0.8), 220);
+        break;
+      case 'eclipse': {
+        // the light goes out all at once: a boom, a rising choir, a ring
+        const d = this.out(0, 1);
+        this.tone('sine', 70, t, 0.005, 0.5 * v, 1.2, d, 30);
+        this.burst(t, { type: 'lowpass', freq: 400, peak: 0.45 * v, decay: 0.9, dest: d });
+        [261.6, 311.1, 392, 466.2].forEach((f, i) => this.tone('sawtooth', f, t + 0.05, 0.25, 0.025 * v, 1.6, this.out((i - 1.5) * 0.4, 0.9)));
+        this.tone('sine', 1567, t + 0.1, 0.01, 0.05 * v, 2.2, d);
+        break;
+      }
+      case 'levelUp': {
+        const d = this.out(0, 0.9);
+        [392, 493.9, 587.3, 784, 987.8, 1174.7].forEach((f, i) => this.tone('triangle', f, t + i * 0.07, 0.01, 0.07 * v, 1.4, d));
+        this.tone('sine', 98, t, 0.02, 0.2 * v, 1.2, d);
+        this.burst(t, { type: 'bandpass', freq: 600, q: 0.7, attack: 0.3, peak: 0.08 * v, decay: 0.4, dest: d, sweepTo: 5000 });
+        break;
+      }
+      case 'lanceTell':
+        this.tone('sine', 660, t, 0.6, 0.05 * v, 0.3, this.out(pan, 0.8), 1320);
+        this.burst(t, { type: 'bandpass', freq: 1200, q: 2, attack: 0.7, peak: 0.05 * v, decay: 0.2, dest: this.out(pan, 0.5), sweepTo: 4000 });
+        break;
+      case 'lance':
+        this.burst(t, { type: 'lowpass', freq: 2400, peak: 0.4 * v, decay: 0.5, dest: this.out(pan, 0.6) });
+        this.tone('sawtooth', 110, t, 0.005, 0.12 * v, 0.6, this.out(pan, 0.5), 55);
+        break;
+      case 'shieldBreak': {
+        const d = this.out(0, 1);
+        for (let i = 0; i < 6; i++) this.tone('triangle', 1400 + Math.random() * 1800, t + i * 0.04, 0.003, 0.05 * v, 0.8, d);
+        this.burst(t, { type: 'highpass', freq: 3000, peak: 0.2 * v, decay: 0.6, dest: d });
+        this.tone('sine', 80, t, 0.01, 0.3 * v, 1, d, 40);
+        break;
+      }
+      case 'relight':
+        this.burst(t, { type: 'bandpass', freq: 500, q: 0.6, attack: 0.25, peak: 0.15 * v, decay: 0.5, dest: this.out(pan, 0.6), sweepTo: 2200 });
+        break;
+      case 'wardenHit': {
+        const d = this.out(0, 1);
+        this.tone('sine', 55, t, 0.005, 0.55 * v, 1.4, d, 28);
+        this.burst(t, { type: 'lowpass', freq: 1200, peak: 0.5 * v, decay: 0.8, dest: d });
+        [523.3, 554.4].forEach((f) => this.tone('sawtooth', f, t, 0.01, 0.03 * v, 1.2, d));
+        break;
+      }
+      case 'sunBreak': {
+        const d = this.out(0, 1);
+        this.tone('sine', 40, t, 0.01, 0.6 * v, 3, d, 20);
+        this.burst(t, { type: 'lowpass', freq: 3000, attack: 0.02, peak: 0.6 * v, decay: 2.5, dest: d, sweepTo: 120 });
+        [261.6, 329.6, 392, 523.3, 659.3].forEach((f, i) => this.tone('triangle', f, t + 1 + i * 0.25, 0.4, 0.05 * v, 4, d));
+        break;
+      }
       default:
         break;
     }

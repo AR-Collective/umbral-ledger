@@ -10,9 +10,14 @@ import { TUNING } from '../tuning.js';
 import { CUTSCENES, SPEAKERS } from '../story.js';
 import { AUDIO } from '../systems/audio.js';
 import { feetOrigin } from '../art/characters.js';
+import { addSoundToggle } from '../systems/soundToggle.js';
 
 const SERIF = '"Cormorant Garamond", Georgia, serif';
 const HI_RES = 2; // 2560x1440 framebuffer for 1:1 2160x1040 panel rendering
+// Layout in 1280x720 view units: the panel sits near the top so the narration box
+// below it has its own band and never covers the artwork.
+const PANEL_TOP = 16;
+const BOX_TOP = 556;
 
 export class CutsceneScene extends Phaser.Scene {
   constructor() {
@@ -23,6 +28,10 @@ export class CutsceneScene extends Phaser.Scene {
     this.panels = CUTSCENES[data.id] ?? [];
     this.next = data.next;
     this.index = -1;
+    // Phaser reuses this scene object for every cutscene, so per-play state must
+    // be reset here. A leftover `finished` from the intro blocked the Hollowmere card.
+    this.finished = false;
+    this.typing = null;
   }
 
   create() {
@@ -42,6 +51,7 @@ export class CutsceneScene extends Phaser.Scene {
     }).setOrigin(1).setDepth(11);
     this.keys = this.input.keyboard.addKeys('E,ENTER,SPACE,ESC');
     this.input.on('pointerdown', () => this.advance());
+    addSoundToggle(this, W - 40 * S, 36 * S, S);
     AUDIO.setAmbience('title');
     this.advance();
   }
@@ -89,13 +99,15 @@ export class CutsceneScene extends Phaser.Scene {
     for (const o of old) this.tweens.add({ targets: o, alpha: 0, x: o.x - 60 * S, duration: 500, onComplete: () => o.destroy() });
     this.box.removeAll(true);
 
-    const frame = this.add.container(W / 2 + 80 * S, H / 2).setAlpha(0);
-    this.layer.add(frame);
     const pw = 1080 * S, ph = 520 * S;
+    // painters draw the panel centred at (0, -40) inside the frame
+    const frameY = PANEL_TOP * S + ph / 2 + 40 * S;
+    const frame = this.add.container(W / 2 + 80 * S, frameY).setAlpha(0);
+    this.layer.add(frame);
     const inner = this.add.container(0, 0);
     const maskShape = this.make.graphics({ x: 0, y: 0 }, false);
     maskShape.fillStyle(0xffffff);
-    maskShape.fillRect(W / 2 - pw / 2, H / 2 - ph / 2 - 40 * S, pw, ph);
+    maskShape.fillRect(W / 2 - pw / 2, PANEL_TOP * S, pw, ph);
     inner.setMask(maskShape.createGeometryMask());
     frame.add(inner);
     this.paint(panel, inner, pw, ph);
@@ -105,17 +117,20 @@ export class CutsceneScene extends Phaser.Scene {
     this.tweens.add({ targets: frame, alpha: 1, x: W / 2, duration: 650, ease: 'Cubic.easeOut' });
     this.tweens.add({ targets: inner, scale: 1.05, duration: 7000, ease: 'Sine.easeOut' });
 
-    // narration box
+    // narration box: below the panel, sized to its text, speaker name inside it
     const isVoice = !!panel.speaker;
-    const boxW = 860 * S;
-    const bg = this.add.rectangle(W / 2, H - 92 * S, boxW, 96 * S, isVoice ? 0x0a0912 : 0xf3efe6, 0.96).setStrokeStyle(2 * S, isVoice ? 0xe8c372 : 0x1a1620, 1);
-    const txt = this.add.text(W / 2, H - 92 * S, '', {
+    const boxW = 860 * S, boxTop = BOX_TOP * S, pad = 14 * S;
+    const nameH = isVoice ? 24 * S : 0;
+    const txt = this.add.text(W / 2, boxTop + pad + nameH, panel.text, {
       fontFamily: SERIF, fontStyle: isVoice ? 'italic' : 'normal', fontSize: `${28 * S}px`, color: isVoice ? '#e8c372' : '#14111a',
       align: 'center', wordWrap: { width: boxW - 60 * S },
-    }).setOrigin(0.5);
+    }).setOrigin(0.5, 0);
+    const boxH = pad * 2 + nameH + txt.height; // measured with the full line, then typed out
+    txt.setText('');
+    const bg = this.add.rectangle(W / 2, boxTop, boxW, boxH, isVoice ? 0x0a0912 : 0xf3efe6, 0.96).setOrigin(0.5, 0).setStrokeStyle(2 * S, isVoice ? 0xe8c372 : 0x1a1620, 1);
     this.box.add([bg, txt]);
     if (isVoice) {
-      const name = this.add.text(W / 2 - boxW / 2 + 16 * S, H - 164 * S, SPEAKERS[panel.speaker].name, {
+      const name = this.add.text(W / 2 - boxW / 2 + 20 * S, boxTop + 10 * S, SPEAKERS[panel.speaker].name, {
         fontFamily: 'Cinzel, Georgia', fontSize: `${15 * S}px`, color: '#e8c372', letterSpacing: 4 * S,
       });
       this.box.add(name);
@@ -313,6 +328,72 @@ export class CutsceneScene extends Phaser.Scene {
         default: break;
       }
       return;
+    }
+
+    // The final world's panels are composed here from the game's own art.
+    const titleText = () => {
+      const t = add(this.add.text(0, -60 * S, panel.title, { fontFamily: 'Cinzel, Georgia', fontSize: `${80 * S}px`, color: '#fff1d6', letterSpacing: 16 * S }).setOrigin(0.5));
+      t.setShadow(0, 0, '#ff7a2a', 30 * S, true, true);
+    };
+    switch (panel.art) {
+      case 'noon': {
+        backdrop(0x2a0806, 0xd0501c);
+        glow(0, top + 90 * S, 0xfff4d8, 14, 14, 0.9);
+        glow(0, top + 90 * S, 0xffffff, 4, 4, 1);
+        add(this.add.image(0, top + 90 * S, 'warden_halo').setBlendMode('ADD').setScale(1.2 * S).setAlpha(0.7));
+        rays(0, top + 90 * S, 0xffe6b0, 9, 1.4, 640, 0.07);
+        skyline(0x3a0c08, 170, 60, 150, 11, 0.3, 0xffa040);
+        fire(-520 * S, 175 * S, 260 * S, 1.2); fire(380 * S, 180 * S, 300 * S, 1.4);
+        skyline(0x140404, 215, 30, 110, 23, 0.15, 0xff8a30);
+        embers(0, bot - 10 * S, pw, 1.1);
+        smoke(0, top + 120 * S, pw, 0x2a0e08, 0.35);
+        if (panel.title) titleText();
+        vignette(0.55);
+        return;
+      }
+      case 'warden': {
+        backdrop(0x1a0505, 0x8a2810);
+        // the Warden fills the panel; his halo and core sit where the painting puts them
+        const ws = 1.3 * S, wx = 250 * S, wy = bot + 14 * S;
+        const hx = wx + 20 * ws, hy = wy - 388 * ws;
+        glow(hx, hy, 0xfff1c0, 9, 9, 0.75);
+        const halo = add(this.add.image(hx, hy, 'warden_halo').setBlendMode('ADD').setScale(0.95 * ws).setAlpha(0.95));
+        this.tweens.add({ targets: halo, angle: 40, duration: 9000 });
+        rays(hx, hy, 0xfff1c0, 13, 2.2, 900, 0.06);
+        add(this.add.image(wx, wy, 'warden_stand').setOrigin(0.5, 460 / 470).setScale(ws).setTint(0x9a7a70));
+        add(this.add.image(wx + 26 * ws, wy - 270 * ws, 'warden_core').setBlendMode('ADD').setScale(0.7 * ws).setAlpha(0.8));
+        embers(0, bot, pw, 0.9);
+        man(-420 * S, bot - 6 * S, 1.1, 0xb48cff, 0x020103, 3, 0.9);
+        vignette(0.6);
+        return;
+      }
+      case 'ascend': {
+        backdrop(0x0c0614, 0x5a1424);
+        glow(0, 60 * S, 0x7a4cff, 10, 7, 0.5);
+        shade(0, bot - 30 * S, 2.6, 0.75);
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          const f = add(this.add.image(Math.cos(a) * 330 * S, -40 * S + Math.sin(a) * 160 * S, 'remnant').setScale(1.6 * S).setBlendMode('ADD'));
+          this.tweens.add({ targets: f, y: f.y - 30 * S, duration: 1600 + i * 120, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+          glow(f.x, f.y, 0xc9a8ff, 1.6, 1.6, 0.5);
+        }
+        motes(0, -40 * S, pw, ph, [0xb48cff, 0x7a4cff, 0xfff1c0], -1);
+        embers(0, bot, pw, 0.6, [0xc9a8ff, 0x7a4cff, 0x2a1450]);
+        vignette(0.6);
+        return;
+      }
+      case 'night': {
+        backdrop(0x060a1a, 0x433762);
+        add(this.add.image(-420 * S, top + 200 * S, 'moon').setScale(1.3 * S));
+        glow(-420 * S, top + 200 * S, 0xffd8b0, 6, 6, 0.25);
+        motes(0, top + 260 * S, pw, 480 * S, [0xffffff, 0xd8e0ff], 1);
+        skyline(0x0d0a18, 200, 60, 150, 17, 0.08, 0xffa040);
+        smoke(0, 180 * S, pw, 0x0a0812, 0.3);
+        for (let i = 0; i < 7; i++) crowd(i, -360 * S + i * 120 * S, bot - 8 * S, 1.05, 0x9fb4ff, 0x020103, -2);
+        vignette(0.7);
+        return;
+      }
+      default: break;
     }
 
     // Procedural fallback if a texture is absent

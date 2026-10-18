@@ -272,6 +272,37 @@ export class LightingSystem {
     return occ;
   }
 
+  // A convex outline that blocks light, for props that are not boxes (a domed
+  // haystack, a barrel), so their shadows and unlit insides follow the painted
+  // shape. points: flat [x0, y0, x1, y1, ...] in world space. Like a rectangle,
+  // the light soaks `inset` px in. Hiding uses coverBox {x, y, w, h} when given
+  // (so a prop hides you exactly where it did as a box), else the bounding box.
+  addPolyOccluder(points, tag = '', { cover = false, inset, coverBox } = {}) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, cx = 0, cy = 0;
+    const n = points.length / 2;
+    for (let i = 0; i < points.length; i += 2) {
+      x0 = Math.min(x0, points[i]); x1 = Math.max(x1, points[i]);
+      y0 = Math.min(y0, points[i + 1]); y1 = Math.max(y1, points[i + 1]);
+      cx += points[i] / n; cy += points[i + 1] / n;
+    }
+    const w = x1 - x0, h = y1 - y0;
+    const ins = inset ?? Math.min(TUNING.light.occluderInset, w * 0.25, h * 0.25);
+    const poly = [];
+    for (let i = 0; i < points.length; i += 2) {
+      const dx = cx - points[i], dy = cy - points[i + 1], d = Math.hypot(dx, dy) || 1;
+      const k = Math.min(ins, d * 0.5) / d;
+      poly.push(points[i] + dx * k, points[i + 1] + dy * k);
+    }
+    const occ = {
+      id: NEXT_ID++, tag, cover, poly, x: x0, y: y0, w, h, dynamic: false, coverBox,
+      contains: (px, py) => pointInPolygon(px, py, poly),
+    };
+    occ.segments = polySegments(poly).map((sg) => boxSeg(sg, occ));
+    for (const sg of occ.segments) this.index.add(sg);
+    this.occluders.push(occ);
+    return occ;
+  }
+
   // Moving convex shapes (the mill wheel's spokes). Call setPolys() each frame.
   addDynamicOccluder(tag = '') {
     const occ = { id: NEXT_ID++, tag, dynamic: true, polys: [], segments: [] };
@@ -450,7 +481,8 @@ export class LightingSystem {
   // True if (x, y) is tucked inside cover (a crate, cart, pillar, statue).
   coverAt(x, y) {
     for (const o of this.occluders) {
-      if (o.cover && x > o.x && x < o.x + o.w && y > o.y && y < o.y + o.h) return true;
+      const b = o.coverBox ?? o;
+      if (o.cover && x > b.x && x < b.x + b.w && y > b.y && y < b.y + b.h) return true;
     }
     return false;
   }
